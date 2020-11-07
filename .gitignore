@@ -131,6 +131,7 @@ dmypy.json
 # This REPO
 checkpoints/
 data/
+notebooks/
 wandb/
 
 # IDE
