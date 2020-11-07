@@ -7,7 +7,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.base import GAPHeadBase
 from layers.core import Flatten
 from utils.initialization import initialize_weights
 
