@@ -196,8 +196,7 @@ class RandAugmentTv(object):
                 TranslateX(0.45),
                 TranslateY(0.45),
             ],
-            k=self.k,
-            verbose=verbose
+            k=self.k
         )
 
     def __call__(self, img: PIL.Image):
