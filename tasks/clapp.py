@@ -26,7 +26,7 @@ class CLAPPLoss(nn.Module):
     def __init__(self,
                  temperature: float,
                  pseudo_temperature: float,
-                 normalize: str = 'sparsemax',
+                 normalize: str = 'softmax',
                  contrast_mode: str = 'queue',
                  ):
         super(CLAPPLoss, self).__init__()
@@ -64,15 +64,21 @@ class CLAPPLoss(nn.Module):
 
         # b & d
         logits_pseudo_neg = torch.einsum('bf,fk->bk', [pseudo, negatives])  # (B, K)
-        logits_pseudo_neg.div_(self.pseudo_temperature)
 
         # if no pseudo-positives selected -> loss_pseudo = torch[nan]; check nan later.
-        probs_pseudo_neg = self._normalize(logits_pseudo_neg, dim=0)
         if self.contrast_mode == 'queue':
+            loss_pseudo, mask_pseudo = self._pseudo_loss_against_queue(logits, logits_pseudo_neg, threshold)
+            return loss, logits, labels, loss_pseudo, mask_pseudo, None
+        
+        elif self.contrast_mode == 'queue-old':
+            logits_pseudo_neg.div_(self.pseudo_temperature)
+            probs_pseudo_neg = self._normalize(logits_pseudo_neg, dim=0)
             loss_pseudo = self._pseudo_loss_against_queue_v2(logits[:, 1:], probs_pseudo_neg, threshold)
             return loss, logits, labels, loss_pseudo, probs_pseudo_neg, None
 
         elif self.contrast_mode == 'batch':
+            logits_pseudo_neg.div_(self.pseudo_temperature)
+            probs_pseudo_neg = self._normalize(logits_pseudo_neg, dim=0)
             loss_pseudo = self._pseudo_loss_against_batch(logits[:, 1:], probs_pseudo_neg, threshold)
             return loss, logits, labels, loss_pseudo, probs_pseudo_neg, None
 
@@ -83,6 +89,36 @@ class CLAPPLoss(nn.Module):
             return sparsemax(x, dim=dim)
         else:
             raise NotImplementedError
+
+    @staticmethod
+    def masked_softmax(x: torch.FloatTensor, m: torch.BoolTensor):
+        x_ = x.masked_fill(~m, float('-inf'))
+        return F.softmax(x_, dim=-1)
+
+    def _pseudo_loss_against_queue(self,
+                                   logits: torch.FloatTensor,
+                                   logits_pseudo_neg: torch.FloatTensor,
+                                   threshold: float = 0.9):
+        """
+        Numerator = exp{ anchor@pseudo / t }
+        Denominator = exp{ anchor@pos / t } + sum[ exp{ anchor@queue } ].
+        """
+        b, k = logits_pseudo_neg.size()
+        frac = 100 / k
+        
+        mask_pseudo = torch.zeros_like(logits_pseudo_neg)
+        for _ in range(10):
+            random_mask = torch.rand_like(logits_pseudo_neg).le(frac)
+            probs_pseudo = self.masked_softmax(logits_pseudo_neg, random_mask)
+            mask_pseudo += probs_pseudo.ge(threshold).float()
+        
+        mask_pseudo = mask_pseudo.bool()
+        num_pseudo_per_anchor = mask_pseudo.sum(dim=1, keepdim=True)
+
+        nll = -1. * F.log_softmax(logits, dim=1).div(num_pseudo_per_anchor)
+        nll = nll[:, 1:].masked_select(mask_pseudo).mean()
+
+        return nll, mask_pseudo  # (1, ) or tensor(nan)
 
     def _pseudo_loss_against_queue_v2(self,
                                       logits_neg: torch.FloatTensor,
@@ -98,26 +134,6 @@ class CLAPPLoss(nn.Module):
         loss_pseudo = loss_pseudo.masked_select(mask_pseudo_neg).mean()
         return loss_pseudo
 
-    def _pseudo_loss_against_queue(self,
-                                   logits_neg: torch.FloatTensor,
-                                   probs_pseudo_neg: torch.FloatTensor,
-                                   threshold: float = 0.95):
-        """
-        Numerator = exp{ anchor@pseudo / t }
-        Denominator = exp{ anchor@pos / t } + sum[ exp{ anchor@queue } ].
-        """
-        mask_pseudo_neg = probs_pseudo_neg.ge(threshold)
-        loss_pseudo = F.binary_cross_entropy_with_logits(logits_neg, mask_pseudo_neg.float(), reduction='none')
-        loss_pseudo = loss_pseudo.masked_select(mask_pseudo_neg).mean()
-        return loss_pseudo  # (1, ) or tensor(nan)
-
-        #log_numerator = logits[:, 1:].clone()                          # (B, K)
-        #denominator = logits[:, 1:].exp().sum(dim=1, keepdim=True)     # (B, 1)
-        #log_prob = log_numerator - torch.log(denominator)              # (B, K)
-        #loss_pseudo = torch.neg(log_prob)                              # (B, K)
-        #loss_pseudo = loss_pseudo.masked_select(pseudo_mask)           # (b,  ), where b << B
-        #loss_pseudo = loss_pseudo.sum() / pseudo_mask.sum()
-
     def _pseudo_loss_against_batch(self,
                                    logits_neg: torch.FloatTensor,
                                    probs_pseudo_neg: torch.FloatTensor,
@@ -130,22 +146,6 @@ class CLAPPLoss(nn.Module):
         loss_pseudo = F.cross_entropy(logits_neg.T, max_idx, reduction='none')  # (K, B), (K, ) -> (K, )
         loss_pseudo = loss_pseudo.masked_select(max_prob.ge(threshold)).mean()  # (k,  ); k << K
         return loss_pseudo  # (1, ) or tensor(nan)
-
-    def _pseudo_loss_outside_key_sim(self,
-                                     logits: torch.FloatTensor,
-                                     logits_pseudo_pos: torch.FloatTensor,
-                                     logits_pseudo_neg: torch.FloatTensor):
-
-        ub = logits_pseudo_pos.view(-1, 1).clone()
-        below_ub = logits_pseudo_neg.lt(ub)
-
-        lb = ub - (1 - ub)
-        above_lb = logits_pseudo_neg.ge(lb)
-
-        pseudo_mask = torch.logical_and(below_ub, above_lb)
-        pseudo_loss = F.binary_cross_entropy_with_logits(logits[:, 1:], pseudo_mask.float(), reduction='none')
-        pseudo_loss = pseudo_loss.masked_select(pseudo_mask).mean()
-        return pseudo_loss, pseudo_mask
 
 
 class CLAPP(Task):
