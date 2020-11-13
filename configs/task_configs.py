@@ -137,6 +137,7 @@ class ConfigBase(object):
         parser.add_argument('--learning_rate', type=float, default=1e-2, help='Base learning rate to start from.')
         parser.add_argument('--weight_decay', type=float, default=1e-3, help='Weight decay factor.')
         parser.add_argument('--cosine_warmup', type=int, default=-1, help='Number of warmups before cosine LR scheduling (-1 to disable.)')
+        parser.add_argument('--cosine_restarts', type=int, default=0, help='Number of hard cosine LR restarts.')
         parser.add_argument('--mixed_precision', action='store_true')
         return parser
 

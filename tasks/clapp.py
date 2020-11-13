@@ -68,20 +68,20 @@ class CLAPPLoss(nn.Module):
         # if no pseudo-positives selected -> loss_pseudo = torch[nan]; check nan later.
         if self.contrast_mode == 'queue':
             logits_pseudo_neg.div_(self.pseudo_temperature)
-            loss_pseudo, mask_pseudo = self._pseudo_loss_against_queue(logits, logits_pseudo_neg, threshold)
-            return loss, logits, labels, loss_pseudo, mask_pseudo, None
+            loss_pseudo, probs_pseudo_neg = self._pseudo_loss_against_queue(logits, logits_pseudo_neg, threshold)
+            return loss, logits, labels, loss_pseudo, probs_pseudo_neg
         
         elif self.contrast_mode == 'queue-old':
             logits_pseudo_neg.div_(self.pseudo_temperature)
             probs_pseudo_neg = self._normalize(logits_pseudo_neg, dim=0)
             loss_pseudo = self._pseudo_loss_against_queue_v2(logits[:, 1:], probs_pseudo_neg, threshold)
-            return loss, logits, labels, loss_pseudo, probs_pseudo_neg, None
+            return loss, logits, labels, loss_pseudo, probs_pseudo_neg
 
         elif self.contrast_mode == 'batch':
             logits_pseudo_neg.div_(self.pseudo_temperature)
             probs_pseudo_neg = self._normalize(logits_pseudo_neg, dim=0)
             loss_pseudo = self._pseudo_loss_against_batch(logits[:, 1:], probs_pseudo_neg, threshold)
-            return loss, logits, labels, loss_pseudo, probs_pseudo_neg, None
+            return loss, logits, labels, loss_pseudo, probs_pseudo_neg
 
     def _normalize(self, x: torch.FloatTensor, dim: int = 0):
         if self.normalize == 'softmax':
@@ -96,10 +96,10 @@ class CLAPPLoss(nn.Module):
         x_ = x.masked_fill(~m, float('-inf'))
         return F.softmax(x_, dim=-1)
 
-    def _pseudo_loss_against_queue(self,
-                                   logits: torch.FloatTensor,
-                                   logits_pseudo_neg: torch.FloatTensor,
-                                   threshold: float = 0.9):
+    def _pseudo_loss_against_queue_old(self,
+                                       logits: torch.FloatTensor,
+                                       logits_pseudo_neg: torch.FloatTensor,
+                                       threshold: float = 0.9):
         """
         Numerator = exp{ anchor@pseudo / t }
         Denominator = exp{ anchor@pos / t } + sum[ exp{ anchor@queue } ].
@@ -121,19 +121,35 @@ class CLAPPLoss(nn.Module):
 
         return nll, mask_pseudo  # (1, ) or tensor(nan)
 
-    def _pseudo_loss_against_queue_v2(self,
-                                      logits_neg: torch.FloatTensor,
-                                      probs_pseudo_neg: torch.FloatTensor,
-                                      threshold: float = 0.95):
-        mask_pseudo_neg = probs_pseudo_neg.ge(threshold)                  # (B, K)
-        num_pseudo_per_anchor = mask_pseudo_neg.sum(dim=1, keepdim=True)  # (B, 1)
-        log_numerator = logits_neg.clone()                                # (B, K)
-        denominator = logits_neg.exp().sum(dim=1, keepdim=True)           # (B, 1)
-        log_prob = log_numerator - torch.log(denominator)                 # (B, K)
-        loss_pseudo = torch.neg(log_prob)                                 # (B, K)
-        loss_pseudo = loss_pseudo.div(num_pseudo_per_anchor + 1)
-        loss_pseudo = loss_pseudo.masked_select(mask_pseudo_neg).mean()
-        return loss_pseudo
+    def _pseudo_loss_against_queue(self,
+                                   logits: torch.FloatTensor,
+                                   logits_pseudo_neg: torch.FloatTensor,
+                                   threshold: float = 0.95):
+        """
+        Numerator = exp{ anchor@pseudo / t }
+        Denominator = exp{ anchor@pos / t } + sum[ exp{ anchor@queue } ].
+        """
+        probs_pseudo_neg = self._normalize(logits_pseudo_neg, dim=0)
+        mask_pseudo_neg = probs_pseudo_neg.ge(threshold)                            # (B, K)
+        num_pseudo_per_anchor = mask_pseudo_neg.sum(dim=1, keepdim=True)            # (B, 1)
+        nll = -1. * F.log_softmax(logits, dim=1).div(1e-5 + num_pseudo_per_anchor)  # (B, 1+K)
+        nll = nll[:, 1:].masked_select(mask_pseudo_neg)                             # (?, )
+        
+        if len(nll) > 0:
+            return nll.mean(), probs_pseudo_neg
+        else:
+            return torch.tensor([float('nan')], device=logits.device), probs_pseudo_neg
+
+
+        return nll, probs_pseudo_neg  # (1, ), (B, K)
+        
+        #log_numerator = logits_neg.clone()                                # (B, K)
+        #denominator = logits_neg.exp().sum(dim=1, keepdim=True)           # (B, 1)
+        #log_prob = log_numerator - torch.log(denominator)                 # (B, K)
+        #loss_pseudo = torch.neg(log_prob)                                 # (B, K)
+        #loss_pseudo = loss_pseudo.div(num_pseudo_per_anchor + 1)
+        #loss_pseudo = loss_pseudo.masked_select(mask_pseudo_neg).mean()
+        #return loss_pseudo
 
     def _pseudo_loss_against_batch(self,
                                    logits_neg: torch.FloatTensor,
@@ -186,7 +202,8 @@ class CLAPP(Task):
                 learning_rate: float,
                 weight_decay: float,
                 cosine_warmup: int = 0,
-                epochs: int = 200,
+                cosine_restarts: int = 0,
+                epochs: int = 2000,
                 batch_size: int = 256,
                 num_workers: int = 4,
                 key_momentum: float = 0.999,
@@ -221,7 +238,8 @@ class CLAPP(Task):
         self.scheduler = get_cosine_scheduler(
             self.optimizer,
             epochs=epochs,
-            warmup_steps=cosine_warmup
+            warmup_steps=cosine_warmup,
+            restarts=cosine_restarts
         )
 
         # Resume from previous checkpoint (if `resume' is not None)
@@ -288,12 +306,15 @@ class CLAPP(Task):
 
         # Train for several epochs
         for epoch in range(1, self.epochs + 1):
+            
             # Shuffling index for distributed training
             if self.distributed and (sampler is not None):
                 sampler.set_epoch(epoch)
+            
             # Train
             history = self.train(train_loader)
             log = " | ".join([f"{k} : {v:.3f}" for k, v in history.items()])
+            
             # Evaluate
             if (self.local_rank == 0) and knn_eval:
                 knn = KNNEvaluator(5, num_classes=memory_loader.dataset.num_classes)
@@ -301,9 +322,11 @@ class CLAPP(Task):
                 log += f" | knn@5: {knn_score*100:.2f}%"
             else:
                 knn_score = None
+            
             # Terminal
             if logger is not None:
                 logger.info(f"Epoch [{epoch:>4}/{self.epochs:>4}] - " + log)
+            
             # TensorBoard
             if self.writer is not None:
                 for k, v in history.items():
@@ -313,10 +336,12 @@ class CLAPP(Task):
                 if self.scheduler is not None:
                     lr = self.scheduler.get_last_lr()[0]
                     self.writer.add_scalar('lr', lr, global_step=epoch)
+            
             # Save model checkpoint
             if (epoch % save_every == 0) & (self.local_rank == 0):
                 ckpt = os.path.join(self.ckpt_dir, f"ckpt.{epoch}.pth.tar")
                 self.save_checkpoint(ckpt, epoch=epoch, history=history)
+            
             # Update learning rate
             if self.scheduler is not None:
                 self.scheduler.step()
@@ -336,15 +361,18 @@ class CLAPP(Task):
         }
 
         with get_rich_pbar(transient=True, auto_refresh=False) as pg:
-            # Add progress bar
-            if self.local_rank == 0:
+            if self.local_rank == 0:  # Add progress bar
                 task = pg.add_task(f"[bold green] CLAPP...", total=steps)
+            
             for i, batch in enumerate(data_loader):
+            
                 # Single batch iteration
                 batch_history = self.train_step(batch)
+            
                 # Accumulate metrics
                 for name in result.keys():
                     result[name][i] = batch_history[name]
+            
                 # Update progress bar
                 if self.local_rank == 0:
                     desc = f"[bold green] [{i+1}/{steps}]: "
@@ -358,43 +386,54 @@ class CLAPP(Task):
     def train_step(self, batch: dict):
         """A single forward & backward pass."""
         with torch.cuda.amp.autocast(self.mixed_precision):
+            
             # Get data (3 views)
             x_q  = batch['x1'].to(self.local_rank)
             x_k  = batch['x2'].to(self.local_rank)
             x_ps = batch['x3'].to(self.local_rank)
+            
             # Compute strong query features; (B, f)
             z_q = F.normalize(self.net_q(x_q), dim=1)
 
             with torch.no_grad():
+                
                 # Update momentum {pseudo, key} networks
                 self._momentum_update_key_net()
                 self._momentum_update_pseudo_net()
+                
                 # Shuffle across nodes (gpus)
                 x_k, idx_unshuffle_k = ForMoCo.batch_shuffle_ddp(x_k)
                 x_ps, idx_unshuffle_ps = ForMoCo.batch_shuffle_ddp(x_ps)
+                
                 # Compute {key, pseudo} features; (B, f)
                 z_k  = F.normalize(self.net_k(x_k), dim=1)
                 z_ps = F.normalize(self.net_ps(x_ps), dim=1)
+                
                 # Restore {key, pseudo} features to their original nodes
                 z_k  = ForMoCo.batch_unshuffle_ddp(z_k, idx_unshuffle_k)
                 z_ps = ForMoCo.batch_unshuffle_ddp(z_ps, idx_unshuffle_ps)
 
             # Compute loss
-            loss, logits, labels, loss_pseudo, probs_pseudo_neg, _ = \
+            loss, logits, labels, loss_pseudo, probs_pseudo_neg = \
                 self.loss_function(z_q, z_ps, z_k, self.queue.buffer, threshold=self.threshold)
+            
             # Backpropagate & update
             if loss_pseudo.isnan():
                 self.backprop(loss)
             else:
                 alpha = 1.0
                 self.backprop(loss + alpha * loss_pseudo)
+            
             # Compute metrics
             with torch.no_grad():
+                
                 # Accuracy of true positives against all negatives
                 rank_1 = TopKAccuracy(k=1)(logits, labels)
+                
                 # Accuracy of pseudo positives with ground truth labels
                 above_threshold = probs_pseudo_neg.ge(self.threshold)
                 num_pseudo = above_threshold.sum()
+                
                 # No pseudo positives may have been selected
                 if self.queue.is_reliable and (num_pseudo > 0):
                     labels_query = batch['y'].to(self.local_rank)                       # (B,  )
@@ -405,6 +444,7 @@ class CLAPP(Task):
                 else:
                     num_correct = torch.zeros(1, dtype=torch.long, device=num_pseudo.device)
                     precision = torch.zeros(1, dtype=torch.float32, device=num_pseudo.device)
+            
             # Update memory queue
             self.queue.update(keys=z_k, labels=batch['y'].to(self.local_rank))
 
@@ -437,7 +477,7 @@ class CLAPP(Task):
             self.net_k.train()
         else:
             self.net_q.eval()
-            self.ent_ps.eval()
+            self.net_ps.eval()
             self.net_k.eval()
 
     @torch.no_grad()
