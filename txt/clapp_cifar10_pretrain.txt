@@ -1,0 +1,28 @@
+--data cifar10
+--input_size 32
+--augmentation torchvision
+--backbone_type resnet18
+--epochs 2000
+--batch_size 256
+--num_workers 8
+--gpus 0
+--optimizer sgd
+--learning_rate 0.03
+--weight_decay 1e-4
+--cosine_warmup 0
+--cosine_restarts 10
+--save_every 50
+--projector_type mlp
+--projector_dim 128
+--num_negatives 16384
+--temperature 0.2
+--pseudo_temperature 0.1
+--key_momentum 0.999
+--pseudo_momentum 0.999
+--query_augment moco
+--key_augment moco
+--pseudo_augment moco
+--normalize softmax
+--threshold 0.5
+--split_bn
+--enable_wandb

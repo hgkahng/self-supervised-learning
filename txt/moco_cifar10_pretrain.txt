@@ -1,0 +1,20 @@
+--data cifar10
+--input_size 32
+--backbone_type resnet18
+--epochs 2000
+--batch_size 256
+--num_workers 4
+--gpus 1
+--optimizer sgd
+--learning_rate 0.03
+--weight_decay 1e-4
+--cosine_warmup 0
+--save_every 50
+--projector_type mlp
+--projector_dim 128
+--temperature 0.2
+--key_momentum 0.999
+--num_negatives 16384
+--augmentation torchvision
+--split_bn
+--enable_wandb
