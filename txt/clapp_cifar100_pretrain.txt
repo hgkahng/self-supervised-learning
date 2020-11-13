@@ -1,4 +1,4 @@
---data cifar10
+--data cifar100
 --input_size 32
 --augmentation torchvision
 --backbone_type resnet50
