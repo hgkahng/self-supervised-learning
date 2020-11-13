@@ -67,6 +67,7 @@ class CLAPPLoss(nn.Module):
 
         # if no pseudo-positives selected -> loss_pseudo = torch[nan]; check nan later.
         if self.contrast_mode == 'queue':
+            logits_pseudo_neg.div_(self.pseudo_temperature)
             loss_pseudo, mask_pseudo = self._pseudo_loss_against_queue(logits, logits_pseudo_neg, threshold)
             return loss, logits, labels, loss_pseudo, mask_pseudo, None
         
