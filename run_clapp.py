@@ -13,6 +13,7 @@ import torch.distributed as dist
 from rich.console import Console
 
 from datasets.cifar import CIFAR10ForCLAPP, CIFAR10
+from datasets.cifar import CIFAR100ForCLAPP, CIFAR100
 from datasets.imagenet import TinyImageNet, TinyImageNetForCLAPP
 from datasets.transforms import MoCoAugment, RandAugment, WeakAugment
 from datasets.transforms import FinetuneAugment, TestAugment
@@ -118,6 +119,14 @@ def main_worker(local_rank: int, config: object):
                                     pseudo_transform=pseudo_trans)
         finetune_set = CIFAR10('./data/cifar10', train=True, transform=finetune_trans)
         test_set     = CIFAR10('./data/cifar10', train=False, transform=test_trans)
+    elif config.data == 'cifar100':
+        train_set = CIFAR100ForCLAPP('./data/cifar100',
+                                     train=True,
+                                     query_transform=query_trans,
+                                     key_transform=key_trans,
+                                     pseudo_transform=pseudo_trans)
+        finetune_set = CIFAR100('./data/cifar100', train=True, transform=finetune_trans)
+        test_set     = CIFAR100('./data/cifar100', train=False, transform=test_trans)
     elif config.data == 'stl10':
         raise NotImplementedError
     elif config.data == 'tinyimagenet':
