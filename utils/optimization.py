@@ -4,7 +4,7 @@ import math
 import torch
 import torch.optim as optim
 from torch.optim import Optimizer, SGD, AdamW
-from torch.optim.lr_scheduler import StepLR, LambdaLR
+from torch.optim.lr_scheduler import StepLR, MultiStepLR, LambdaLR
 
 
 class LARS(Optimizer):
@@ -245,6 +245,10 @@ def get_scheduler(optimizer: optim.Optimizer, name: str, epochs: int, **kwargs):
         return WarmupCosineWithHardRestartsSchedule(optimizer, warmup_steps=warmup_steps, t_total=epochs, cycles=cycles)
     else:
         return None
+
+
+def get_multi_step_scheduler(optimizer: optim.Optimizer, milestones: list, gamma: float = 0.1):
+    return MultiStepLR(optimizer, milestones=milestones, gamma=gamma)
 
 
 def get_cosine_scheduler(optimizer: optim.Optimizer, epochs: int, warmup_steps: int = 0, restarts: int = 0):
