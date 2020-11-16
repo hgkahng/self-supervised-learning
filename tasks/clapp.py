@@ -139,17 +139,6 @@ class CLAPPLoss(nn.Module):
         else:
             return torch.tensor([float('nan')], device=logits.device), probs_pseudo_neg
 
-
-        return nll, probs_pseudo_neg  # (1, ), (B, K)
-        
-        #log_numerator = logits_neg.clone()                                # (B, K)
-        #denominator = logits_neg.exp().sum(dim=1, keepdim=True)           # (B, 1)
-        #log_prob = log_numerator - torch.log(denominator)                 # (B, K)
-        #loss_pseudo = torch.neg(log_prob)                                 # (B, K)
-        #loss_pseudo = loss_pseudo.div(num_pseudo_per_anchor + 1)
-        #loss_pseudo = loss_pseudo.masked_select(mask_pseudo_neg).mean()
-        #return loss_pseudo
-
     def _pseudo_loss_against_batch(self,
                                    logits_neg: torch.FloatTensor,
                                    probs_pseudo_neg: torch.FloatTensor,
@@ -243,7 +232,7 @@ class CLAPP(Task):
             restarts=cosine_restarts
         )
 
-        # Resume from previous checkpoint (if `resume' is not None)
+        # Resume from previous checkpoint (if 'resume' is not None)
         if resume is not None:
             if not os.path.exists(resume):
                 raise FileNotFoundError
@@ -320,7 +309,7 @@ class CLAPP(Task):
             if (self.local_rank == 0) and knn_eval:
                 knn = KNNEvaluator(5, num_classes=memory_loader.dataset.num_classes)
                 knn_score = knn.evaluate(self.net_q, memory_loader=memory_loader, query_loader=query_loader)
-                log += f" | knn@5: {knn_score*100:.2f}%"
+                log += f" | knn@5: {knn_score*100:.2f}% |"
             else:
                 knn_score = None
             
@@ -457,7 +446,6 @@ class CLAPP(Task):
             'num_pseudo': num_pseudo,
             'precision': precision,
         }
-
 
     def backprop(self, loss: torch.FloatTensor):
         """SGD parameter update, optionally with mixed precision."""

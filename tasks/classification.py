@@ -18,6 +18,7 @@ from utils.metrics import TopKAccuracy
 from utils.logging import make_epoch_description
 from utils.optimization import get_optimizer
 from utils.optimization import get_cosine_scheduler
+from utils.optimization import get_multi_step_scheduler
 
 
 class Classification(Task):
