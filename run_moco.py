@@ -12,8 +12,8 @@ import torch.distributed as dist
 
 from rich.console import Console
 
-from datasets.cifar import CIFAR10Pair, CIFAR10
-from datasets.cifar import CIFAR100Pair, CIFAR100
+from datasets.cifar import CIFAR10Pair, CIFAR10, CIFAR10ForMoCo
+from datasets.cifar import CIFAR100Pair, CIFAR100, CIFAR100ForMoCo
 from datasets.stl10 import STL10Pair, STL10
 from datasets.imagenet import TinyImageNetPair, TinyImageNet
 from datasets.transforms import MoCoAugment, FinetuneAugment, TestAugment

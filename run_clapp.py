@@ -98,6 +98,8 @@ def main_worker(local_rank: int, config: object):
         head = LinearHead(encoder.out_channels, config.projector_dim)
     elif config.projector_type == 'mlp':
         head = MLPHead(encoder.out_channels, config.projector_dim)
+    else:
+        raise NotImplementedError
 
     if config.split_bn:
         encoder = SplitBatchNorm2d.convert_split_batchnorm(encoder)
