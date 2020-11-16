@@ -27,7 +27,7 @@ class CLAPPLoss(nn.Module):
                  temperature: float,
                  pseudo_temperature: float,
                  normalize: str = 'softmax',
-                 contrast_mode: str = 'queue',
+                 contrast_mode: str = 'queue-v2',
                  ):
         super(CLAPPLoss, self).__init__()
 
@@ -71,11 +71,10 @@ class CLAPPLoss(nn.Module):
             loss_pseudo, probs_pseudo_neg = self._pseudo_loss_against_queue(logits, logits_pseudo_neg, threshold)
             return loss, logits, labels, loss_pseudo, probs_pseudo_neg
         
-        elif self.contrast_mode == 'queue-old':
+        elif self.contrast_mode == 'queue-v2':
             logits_pseudo_neg.div_(self.pseudo_temperature)
-            probs_pseudo_neg = self._normalize(logits_pseudo_neg, dim=0)
-            loss_pseudo = self._pseudo_loss_against_queue_v2(logits[:, 1:], probs_pseudo_neg, threshold)
-            return loss, logits, labels, loss_pseudo, probs_pseudo_neg
+            loss_pseudo, mask_pseudo_neg = self._pseudo_loss_against_queue_v2(logits, logits_pseudo_neg, threshold)
+            return loss, logits, labels, loss_pseudo, mask_pseudo_neg
 
         elif self.contrast_mode == 'batch':
             logits_pseudo_neg.div_(self.pseudo_temperature)
@@ -96,19 +95,19 @@ class CLAPPLoss(nn.Module):
         x_ = x.masked_fill(~m, float('-inf'))
         return F.softmax(x_, dim=-1)
 
-    def _pseudo_loss_against_queue_old(self,
-                                       logits: torch.FloatTensor,
-                                       logits_pseudo_neg: torch.FloatTensor,
-                                       threshold: float = 0.9):
+    def _pseudo_loss_against_queue_v2(self,
+                                      logits: torch.FloatTensor,
+                                      logits_pseudo_neg: torch.FloatTensor,
+                                      threshold: float = 0.9):
         """
         Numerator = exp{ anchor@pseudo / t }
         Denominator = exp{ anchor@pos / t } + sum[ exp{ anchor@queue } ].
         """
         b, k = logits_pseudo_neg.size()
-        frac = 100 / k
+        frac = 100 / k  # TODO: as hyperparameter
         
         mask_pseudo = torch.zeros_like(logits_pseudo_neg)
-        for _ in range(10):
+        for _ in range(10):  # TODO: as hyperparameter
             random_mask = torch.rand_like(logits_pseudo_neg).le(frac)
             probs_pseudo = self.masked_softmax(logits_pseudo_neg, random_mask)
             mask_pseudo += probs_pseudo.ge(threshold).float()
@@ -116,7 +115,7 @@ class CLAPPLoss(nn.Module):
         mask_pseudo = mask_pseudo.bool()
         num_pseudo_per_anchor = mask_pseudo.sum(dim=1, keepdim=True)
 
-        nll = -1. * F.log_softmax(logits, dim=1).div(num_pseudo_per_anchor)
+        nll = -1. * F.log_softmax(logits, dim=1).div(1e-5 + num_pseudo_per_anchor)
         nll = nll[:, 1:].masked_select(mask_pseudo).mean()
 
         return nll, mask_pseudo  # (1, ) or tensor(nan)
@@ -209,6 +208,7 @@ class CLAPP(Task):
                 key_momentum: float = 0.999,
                 pseudo_momentum: float = 0.5,
                 threshold: float = 0.95,
+                ramp_up: int = 0,
                 distributed: bool = False,
                 local_rank: int = 0,
                 mixed_precision: bool = True,
@@ -222,6 +222,7 @@ class CLAPP(Task):
         self.key_momentum = key_momentum        # pylint: disable=attribute-defined-outside-init
         self.pseudo_momentum = pseudo_momentum  # pylint: disable=attribute-defined-outside-init
         self.threshold = threshold              # pylint: disable=attribute-defined-outside-init
+        self.ramp_up = ramp_up                  # pylint: disable=attribute-defined-outside-init
         self.distributed = distributed          # pylint: disable=attribute-defined-outside-init
         self.local_rank = local_rank            # pylint: disable=attribute-defined-outside-init
         self.mixed_precision = mixed_precision  # pylint: disable=attribute-defined-outside-init
@@ -312,7 +313,7 @@ class CLAPP(Task):
                 sampler.set_epoch(epoch)
             
             # Train
-            history = self.train(train_loader)
+            history = self.train(train_loader, epoch=epoch)
             log = " | ".join([f"{k} : {v:.3f}" for k, v in history.items()])
             
             # Evaluate
@@ -346,7 +347,7 @@ class CLAPP(Task):
             if self.scheduler is not None:
                 self.scheduler.step()
 
-    def train(self, data_loader: DataLoader):
+    def train(self, data_loader: DataLoader, epoch: int):
         """CLAPP training."""
 
         steps = len(data_loader)
@@ -367,7 +368,7 @@ class CLAPP(Task):
             for i, batch in enumerate(data_loader):
             
                 # Single batch iteration
-                batch_history = self.train_step(batch)
+                batch_history = self.train_step(batch, epoch=epoch)
             
                 # Accumulate metrics
                 for name in result.keys():
@@ -383,7 +384,7 @@ class CLAPP(Task):
 
         return {k: self.nanmean(v).item() for k, v in result.items()}
 
-    def train_step(self, batch: dict):
+    def train_step(self, batch: dict, epoch: int):
         """A single forward & backward pass."""
         with torch.cuda.amp.autocast(self.mixed_precision):
             
@@ -418,7 +419,7 @@ class CLAPP(Task):
                 self.loss_function(z_q, z_ps, z_k, self.queue.buffer, threshold=self.threshold)
             
             # Backpropagate & update
-            if loss_pseudo.isnan():
+            if loss_pseudo.isnan() or (epoch <= self.ramp_up):
                 self.backprop(loss)
             else:
                 alpha = 1.0
