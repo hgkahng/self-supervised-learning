@@ -130,6 +130,36 @@ class TinyImageNetPair(TinyImageNet):
         return dict(x1=x1, x2=x2, y=target, idx=idx)
 
 
+class TinyImageNetForMoCo(TinyImageNet):
+    def __init__(self,
+                 root: str = './data/tiny-imagenet-200/',
+                 split: str = 'train',
+                 query_transform: object = None,
+                 key_transform: object = None,
+                 in_memory: bool = True,
+                 **kwargs):
+        super(TinyImageNetForMoCo, self).__init__(root=root,
+                                                  split=split,
+                                                  transform=None,
+                                                  target_transform=None,
+                                                  in_memory=in_memory,
+                                                  **kwargs)
+        self.query_transform = query_transform
+        self.key_transform = key_transform
+
+    def __getitem__(self, idx):
+        path = self.image_paths[idx]
+        target = self.labels[os.path.basename(path)]
+        if self.in_memory:
+            img = self.images[idx]
+        else:
+            img = load_image_cv2(path)
+
+        x1 = self.query_transform(img)
+        x2 = self.key_transform(img)
+
+        return dict(x1=x1, x2=x2, y=target, idx=idx)
+
 class TinyImageNetForCLAPP(TinyImageNet):
     def __init__(self,
                  root: str = './data/tiny-imagenet-200/',
@@ -221,5 +251,5 @@ class ImageNetPair(ImageNet):
         return dict(x1=x1, x2=x2, y=target, idx=idx)
 
 
-ImageNetForMoCo = ImageNetForSimCLR = ImageNetPair
-TinyImageNetForMoCo = TinyImageNetForSimCLR = TinyImageNetPair
+ImageNetForSimCLR = ImageNetPair
+TinyImageNetForSimCLR = TinyImageNetPair

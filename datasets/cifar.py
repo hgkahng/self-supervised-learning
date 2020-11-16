@@ -134,6 +134,54 @@ class CIFAR100Pair(_CIFAR100):
         return dict(x1=x1, x2=x2, y=target, idx=idx)
 
 
+class CIFAR10ForMoCo(_CIFAR10):
+    def __init__(self,
+                 root: str,
+                 train: bool,
+                 query_transform: object = None,
+                 key_transform: object = None):
+        super(CIFAR10ForMoCo, self).__init__(root=root,
+                                             train=train,
+                                             transform=None,
+                                             target_transform=None,
+                                             download=False)
+        self.query_transform = query_transform
+        self.key_transform = key_transform
+
+    def __getitem__(self, idx):
+
+        img, target = self.data[idx], self.targets[idx]
+
+        x1 = self.query_transform(img)
+        x2 = self.key_transform(img)
+
+        return dict(x1=x1, x2=x2, y=target, idx=idx)
+
+
+class CIFAR100ForMoCo(_CIFAR10):
+    def __init__(self,
+                 root: str,
+                 train: bool,
+                 query_transform: object = None,
+                 key_transform: object = None):
+        super(CIFAR100ForMoCo, self).__init__(root=root,
+                                              train=train,
+                                              transform=None,
+                                              target_transform=None,
+                                              download=False)
+        self.query_transform = query_transform
+        self.key_transform = key_transform
+
+    def __getitem__(self, idx):
+
+        img, target = self.data[idx], self.targets[idx]
+
+        x1 = self.query_transform(img)
+        x2 = self.key_transform(img)
+
+        return dict(x1=x1, x2=x2, y=target, idx=idx)
+
+
 class CIFAR10ForCLAPP(_CIFAR10):
     def __init__(self,
                  root: str,
@@ -186,5 +234,5 @@ class CIFAR100ForCLAPP(_CIFAR100):
         return dict(x1=x1, x2=x2, x3=x3, y=target, idx=idx)
 
 
-CIFAR10ForMoCo = CIFAR10ForSimCLR = CIFAR10Pair
-CIFAR100ForMoCo = CIFAR100ForSimCLR = CIFAR100Pair
+CIFAR10ForSimCLR = CIFAR10Pair
+CIFAR100ForSimCLR = CIFAR100Pair

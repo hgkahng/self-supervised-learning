@@ -62,4 +62,29 @@ class STL10Pair(_STL10):
         return dict(x1=x1, x2=x2, y=target, idx=idx)
 
 
-STL10ForMoCo = STL10ForSimCLR = STL10Pair
+class STL10ForMoCo(_STL10):
+    def __init__(self,
+                 root: str = './data/stl10',
+                 split: str = 'train+unlabeled',
+                 query_transform: object = None,
+                 key_transform: object = None,
+                 **kwargs):
+        super(STL10ForMoCo, self).__init__(root=root,
+                                           split=split,
+                                           folds=None,
+                                           transform=None,
+                                           target_transform=None,
+                                           download=False)
+        self.query_transform = query_transform
+        self.key_transform = key_transform
+
+    def __getitem__(self, idx):
+        img, target = self.data[idx], int(self.labels[idx])
+        if self.transform is not None:
+            x1 = self.query_transform(img)
+            x2 = self.key_transform(img)
+
+        return dict(x1=x1, x2=x2, y=target, idx=idx)
+
+
+STL10ForSimCLR = STL10Pair
