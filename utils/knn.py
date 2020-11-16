@@ -8,21 +8,26 @@ from utils.logging import get_rich_pbar
 
 class KNNEvaluator(object):
     def __init__(self,
-                 num_neighbors: int,
+                 num_neighbors: int or list,
                  num_classes: int,
                  temperature: float = 0.1):
         
-        self.num_neighbors = num_neighbors
+        if isinstance(num_neighbors, int):
+            self.num_neighbors = [num_neighbors]
+        elif isinstance(num_neighbors, list):
+            self.num_neighbors = num_neighbors
+        else:
+            raise NotImplementedError
         self.num_classes = num_classes
         self.temperature = temperature
 
     @torch.no_grad()
     def predict(self,
+                k: int,
                 query: torch.FloatTensor,
                 memory_bank: torch.FloatTensor,
                 memory_labels: torch.LongTensor):
 
-        k = self.num_neighbors
         C = self.num_classes
         T = self.temperature
         B, _ = query.size()
@@ -46,42 +51,22 @@ class KNNEvaluator(object):
         return pred.argsort(dim=-1, descending=True)                    # (b, C); first column gives label of highest confidence
 
     @torch.no_grad()
-    def score(self,
-              query: torch.FloatTensor,
-              query_labels: torch.LongTensor,
-              memory_bank: torch.FloatTensor,
-              memory_labels: torch.LongTensor):
-
-        pred_labels = self.predict(query, memory_bank, memory_labels)[:, 0]
-        query_labels = query_labels.squeeze()
-        num_correct = pred_labels.eq(query_labels).float().sum().item()
-
-        return num_correct / len(query_labels)
-
-    @torch.no_grad()
     def evaluate(self,
-                 *nets,
-                 query_loader: torch.utils.data.DataLoader,
-                 memory_loader: torch.utils.data.DataLoader):
+                 net,
+                 memory_loader: torch.utils.data.DataLoader,
+                 query_loader: torch.utils.data.DataLoader):
         """
         Evaluate model.
         Arguments:
-            net: a `nn.Module` instance. Unlike the rest of the code, provide a
-            whole `nn.Sequential` instance containing the CNN `backbone` and MLP `projector`.
-            backbone: ...
-            projector: ...
-            query_loader: a `DataLoader` instance of test data. Apply
-                 minimal data augmentation as used for testing for linear evaluation.
-                 (i.e., Resize + Crop (0.875 x size), etc.)
+            net: a `nn.Module` instance.
             memory_loader: a `DataLoader` instance of train data. Apply
                  minimal augmentation as if used for training for linear evaluation.
                  (i.e., HorizontalFlip(0.5), etc.)
+            query_loader: a `DataLoader` instance of test data. Apply
+                 minimal data augmentation as used for testing for linear evaluation.
+                 (i.e., Resize + Crop (0.875 x size), etc.)
         """
 
-        if len(nets) == 1:
-            net = nets[0]
-        else:
-            net = nn.Sequential(*nets)
         net.eval()
         device = next(net.parameters()).device
 
@@ -106,12 +91,21 @@ class KNNEvaluator(object):
             # 2. Extract query features (test data to evaluate) and
             #  and evalute against memory features.
             scores = []
-            for _, batch in enumerate(query_loader):
-                z = net(batch['x'].to(device))
-                z = F.normalize(z, dim=1)
-                y = batch['y'].to(device)
-                score = self.score(z, y, memory_bank, memory_labels)
+            for k in self.num_neighbors:
+                total_correct = 0
+                for _, batch in enumerate(query_loader):
+                    z = net(batch['x'].to(device))
+                    z = F.normalize(z, dim=1)
+                    y = batch['y'].to(device)
+                    y_pred = self.predict(k,
+                                          query=z,
+                                          memory_bank=memory_bank,
+                                          memory_labels=memory_labels)[:, 0].squeeze()
+                    total_correct += y.eq(y_pred).sum().item()
+                    pg.update(task_2, advance=1.) 
+                score = total_correct / len(query_loader.dataset)
                 scores += [score]
-                pg.update(task_2, desc=desc_2+f"{score*100:.2f}%", advance=1.)
 
-        return sum(scores) / len(query_loader)
+        if len(scores) == 1:
+            return scores[0]
+        return scores
