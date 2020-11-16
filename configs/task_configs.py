@@ -8,7 +8,7 @@ import datetime
 
 
 class ConfigBase(object):
-    def __init__(self, args: (dict, argparse.Namespace) = None, **kwargs):
+    def __init__(self, args: argparse.Namespace = None, **kwargs):
 
         if isinstance(args, dict):
             attrs = args
@@ -311,6 +311,7 @@ class CLAPPConfig(PretrainConfigBase):
         parser.add_argument('--normalize', type=str, default='softmax', help='Method for normalizing logits to distribution.')
         parser.add_argument('--threshold', type=float, default=0.5, help='Threshold for pseudo labeling.')
         parser.add_argument('--split_bn', action='store_true', help='Use ghost batch normalization.')
+        parser.add_argument('--ramp_up', type=int, default=0)
         return parser
 
     @property
