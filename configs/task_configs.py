@@ -114,7 +114,7 @@ class ConfigBase(object):
         parser = argparse.ArgumentParser("Data", add_help=False)
         parser.add_argument('--data', type=str, choices=('wm811k', 'cifar10', 'cifar100', 'stl10', 'tinyimagenet', 'imagenet'), required=True)
         parser.add_argument('--input_size', type=int, choices=(32, 64, 96, 224), required=True)
-        parser.add_argument('--augmentation', type=str, default='albumentations',
+        parser.add_argument('--augmentation', type=str, default='torchvision',
                             choices=('torchvision', 'albumentations'), help='Package used for augmentation.')
         return parser
 
