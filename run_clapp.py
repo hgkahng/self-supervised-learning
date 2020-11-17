@@ -188,6 +188,7 @@ def main_worker(local_rank: int, config: object):
         key_momentum=config.key_momentum,
         pseudo_momentum=config.pseudo_momentum,
         threshold=config.threshold,
+        ramp_up=config.ramp_up,
         distributed=config.distributed,
         local_rank=local_rank,
         mixed_precision=config.mixed_precision,

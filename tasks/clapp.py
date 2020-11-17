@@ -359,7 +359,7 @@ class CLAPP(Task):
 
         return {k: self.nanmean(v).item() for k, v in result.items()}
 
-    def train_step(self, batch: dict, epoch: int, symmetric: bool = False):
+    def train_step(self, batch: dict, epoch: int):
         """A single forward & backward pass."""
 
         with torch.cuda.amp.autocast(self.mixed_precision):
