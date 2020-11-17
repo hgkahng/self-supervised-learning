@@ -283,7 +283,7 @@ class MoCoConfig(PretrainConfigBase):
         parser.add_argument('--num_negatives', type=int, default=65536, help='Number of negative examples to maintain.')
         parser.add_argument('--key_momentum', type=float, default=0.999, help='Momentum for updating key encoder.')
         parser.add_argument('--split_bn', action='store_true')
-        parser.add_argument('--knn_k', type=int, nargs='+', default=[5, 20], required=True, help='')
+        parser.add_argument('--knn_k', type=int, nargs='+', default=[5, 200], help='')
         return parser
 
     @property
