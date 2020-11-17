@@ -2,11 +2,11 @@
 --input_size 32
 --backbone_type resnet18
 --epochs 2000
---batch_size 1024
+--batch_size 256
 --num_workers 8
 --gpus 0
---optimizer lars
---learning_rate 0.12
+--optimizer sgd
+--learning_rate 0.03
 --weight_decay 1e-4
 --cosine_warmup 10
 --save_every 50
@@ -14,7 +14,10 @@
 --projector_dim 128
 --temperature 0.2
 --key_momentum 0.999
---num_negatives 16384
---augmentation torchvision
+--num_negatives 4096
+--query_augment moco
+--key_augment moco
+--knn_k 5 200
 --split_bn
 --enable_wandb
+--mixed_precision
