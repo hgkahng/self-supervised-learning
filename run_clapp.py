@@ -173,6 +173,8 @@ def main_worker(local_rank: int, config: object):
             temperature=config.temperature,
             pseudo_temperature=config.pseudo_temperature,
             normalize=config.normalize,
+            select_from=config.select_from,
+            select_trials=config.select_trials
         ),
     )
     model.prepare(
