@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+from run_clapp import AUGMENTS
 import sys
 import time
 import rich
@@ -14,9 +15,9 @@ from rich.console import Console
 
 from datasets.cifar import CIFAR10Pair, CIFAR10, CIFAR10ForMoCo
 from datasets.cifar import CIFAR100Pair, CIFAR100, CIFAR100ForMoCo
-from datasets.stl10 import STL10Pair, STL10
-from datasets.imagenet import TinyImageNetPair, TinyImageNet
-from datasets.transforms import MoCoAugment, FinetuneAugment, TestAugment
+from datasets.stl10 import STL10ForMoCo, STL10Pair, STL10
+from datasets.imagenet import TinyImageNetForMoCo, TinyImageNetPair, TinyImageNet
+from datasets.transforms import MoCoAugment, RandAugment, FinetuneAugment, TestAugment
 from configs.task_configs import MoCoConfig
 from models.backbone import ResNetBackbone
 from models.head import LinearHead, MLPHead
@@ -24,6 +25,12 @@ from layers.batchnorm import SplitBatchNorm2d
 from tasks.moco import MoCo, MemoryQueue, MoCoLoss
 from utils.logging import get_rich_logger
 from utils.wandb import configure_wandb
+
+
+AUGMENTS = {
+    'rand': RandAugment,
+    'moco': MoCoAugment,
+}
 
 
 def main():
@@ -97,24 +104,38 @@ def main_worker(local_rank: int, config: object):
 
     # Data
     trans_kwargs = dict(size=config.input_size, data=config.data, impl=config.augmentation)
-    pretrain_trans = MoCoAugment(**trans_kwargs)
+    query_trans = AUGMENTS[config.query_augment](**trans_kwargs)
+    key_trans   = AUGMENTS[config.key_augment](**trans_kwargs)
     finetune_trans = FinetuneAugment(**trans_kwargs)
     test_trans = TestAugment(**trans_kwargs)
 
     if config.data == 'cifar10':
-        train_set = CIFAR10Pair('./data/cifar10', train=True, transform=pretrain_trans)
+        train_set = CIFAR100ForMoCo('./data/cifar10',
+                                    train=True,
+                                    query_transform=query_trans,
+                                    key_transform=key_trans)
         finetune_set = CIFAR10('./data/cifar10', train=True, transform=finetune_trans)
         test_set = CIFAR10('./data/cifar10', train=False, transform=test_trans)
     elif config.data == 'cifar100':
-        train_set = CIFAR100Pair('./data/cifar100', train=True, transform=pretrain_trans)
+        train_set = CIFAR100ForMoCo('./data/cifar100',
+                                    train=True,
+                                    query_transform=query_trans,
+                                    key_transform=key_trans)
         finetune_set = CIFAR100('./data/cifar100', train=True, transform=finetune_trans)
         test_set = CIFAR100('./data/cifar100', train=False, transform=test_trans)
     elif config.data == 'stl10':
-        train_set = STL10Pair('./data/stl10', split='train+unlabeled', transform=pretrain_trans)
+        train_set = STL10ForMoCo('./data/stl10',
+                                 split='train+unlabeled',
+                                 query_transform=query_trans,
+                                 key_transform=key_trans)
         finetune_set = STL10('./data/stl10', split='train', transform=finetune_trans)
         test_set = STL10('./data/stl10', split='test', transform=test_trans)
     elif config.data == 'tinyimagenet':
-        train_set = TinyImageNetPair('./data/tiny-imagenet-200', split='train', transform=pretrain_trans, in_memory=True)
+        train_set = TinyImageNetForMoCo('./data/tiny-imagenet-200',
+                                        split='train',
+                                        query_transform=query_trans,
+                                        key_transform=key_trans,
+                                        in_memory=True)
         finetune_set = TinyImageNet('./data/tiny-imagenet-200', split='train', transform=finetune_trans, in_memory=True)
         test_set = TinyImageNet('./data/tiny-imagenet-200', split='val', transform=test_trans, in_memory=True)
     elif config.data == 'imagenet':

@@ -282,6 +282,8 @@ class MoCoConfig(PretrainConfigBase):
         parser.add_argument('--temperature', type=float, default=0.07, help='Logit scaling factor.')
         parser.add_argument('--num_negatives', type=int, default=65536, help='Number of negative examples to maintain.')
         parser.add_argument('--key_momentum', type=float, default=0.999, help='Momentum for updating key encoder.')
+        parser.add_argument('--query_augment', type=str, default='moco', help='Augmentation applied to query (x_q).')
+        parser.add_argument('--key_augment', type=str, default='moco', help='Augmentation applied to key (x_k).')
         parser.add_argument('--split_bn', action='store_true')
         parser.add_argument('--knn_k', type=int, nargs='+', default=[5, 200], help='')
         return parser
