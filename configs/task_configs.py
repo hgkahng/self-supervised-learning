@@ -310,11 +310,13 @@ class CLAPPConfig(PretrainConfigBase):
         parser.add_argument('--pseudo_momentum', type=float, default=0.5, help='Momentum for updating pseudo network.')
         parser.add_argument('--query_augment', type=str, default='rand', help='Augmentation applied to query (x_q).')
         parser.add_argument('--key_augment', type=str, default='moco', help='Augmentation applied to key (x_k).')
-        parser.add_argument('--pseudo_augment', type=str, default='weak', help='Augmentation applied to pseudo labeler (x_p).')
+        parser.add_argument('--pseudo_augment', type=str, default='moco', help='Augmentation applied to pseudo labeler (x_p).')
+        parser.add_argument('--select_from', type=int, default=100, help='Normalizing dimension size.')
+        parser.add_argument('--select_trials', type=int, default=10, help='Number of pseudo selection trials.')
         parser.add_argument('--normalize', type=str, default='softmax', help='Method for normalizing logits to distribution.')
         parser.add_argument('--threshold', type=float, default=0.5, help='Threshold for pseudo labeling.')
         parser.add_argument('--split_bn', action='store_true', help='Use ghost batch normalization.')
-        parser.add_argument('--ramp_up', type=int, default=0)
+        parser.add_argument('--ramp_up', type=int, default=50)
         parser.add_argument('--knn_k', type=int, nargs='+', default=[5, 200], help='')
         return parser
 
@@ -395,8 +397,8 @@ class ClassificationConfig(DownstreamConfigBase):
         parser = argparse.ArgumentParser('Linear evaluation of pre-trained model.', add_help=False)
         parser.add_argument('--labels', type=float, default=1.0, help='Size of labeled data (0, 1].')
         parser.add_argument('--pretrained_file', type=str, default=None, help='Path to pretrained model file (.pt).')
-        parser.add_argument('--pretrained_task', type=str, default=None, help='Type of pretraining task.')
-        parser.add_argument('--freeze', action='store_true')
+        parser.add_argument('--pretrained_task', type=str, default=None, required=True, help='Type of pretraining task.')
+        parser.add_argument('--freeze', action='store_true', help='Freeze weights of CNN backbone.')
         return parser
 
     @property
