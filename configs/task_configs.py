@@ -313,7 +313,7 @@ class CLAPPConfig(PretrainConfigBase):
         parser.add_argument('--threshold', type=float, default=0.5, help='Threshold for pseudo labeling.')
         parser.add_argument('--split_bn', action='store_true', help='Use ghost batch normalization.')
         parser.add_argument('--ramp_up', type=int, default=0)
-        parser.add_argument('--knn_k', type=int, nargs='+', default=[5, 20], required=True, help='')
+        parser.add_argument('--knn_k', type=int, nargs='+', default=[5, 200], help='')
         return parser
 
     @property
