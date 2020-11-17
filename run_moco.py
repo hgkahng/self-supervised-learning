@@ -89,6 +89,8 @@ def main_worker(local_rank: int, config: object):
         head = LinearHead(encoder.out_channels, config.projector_dim)
     elif config.projector_type == 'mlp':
         head = MLPHead(encoder.out_channels, config.projector_dim)
+    else:
+        raise NotImplementedError
 
     if config.split_bn:
         encoder = SplitBatchNorm2d.convert_split_batchnorm(encoder)
@@ -131,12 +133,11 @@ def main_worker(local_rank: int, config: object):
         logger = None
 
     # Model (Task)
-    model = MoCo(
-        encoder=encoder,
-        head=head,
-        queue=MemoryQueue(size=(config.projector_dim, config.num_negatives),
-                          device=local_rank),
-        loss_function=MoCoLoss(config.temperature)
+    model = MoCo(encoder=encoder,
+                 head=head,
+                 queue=MemoryQueue(size=(config.projector_dim, config.num_negatives),
+                                   device=local_rank),
+                 loss_function=MoCoLoss(config.temperature)
     )
     model.prepare(
         ckpt_dir=config.checkpoint_dir,
@@ -158,11 +159,11 @@ def main_worker(local_rank: int, config: object):
     start = time.time()
     model.run(
         train_set,
-        epochs=config.epochs,
-        save_every=config.save_every,
-        logger=logger,
         memory_set=finetune_set,
         query_set=test_set,
+        save_every=config.save_every,
+        logger=logger,
+        knn_k=config.knn_k,
     )
     elapsed_sec = time.time() - start
 

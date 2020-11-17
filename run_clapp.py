@@ -138,10 +138,14 @@ def main_worker(local_rank: int, config: object):
                                          key_transform=key_trans,
                                          pseudo_transform=pseudo_trans,
                                          in_memory=True)
-        finetune_set = TinyImageNet('./data/tiny-imagenet-200', split='train',
-                                    transform=finetune_trans, in_memory=True)
-        test_set     = TinyImageNet('./data/tiny-imagenet-200', split='val',
-                                    transform=test_trans, in_memory=True)
+        finetune_set = TinyImageNet('./data/tiny-imagenet-200',
+                                    split='train',
+                                    transform=finetune_trans,
+                                    in_memory=True)
+        test_set     = TinyImageNet('./data/tiny-imagenet-200',
+                                    split='val',
+                                    transform=test_trans,
+                                    in_memory=True)
     elif config.data == 'imagenet':
         raise NotImplementedError
     else:
@@ -199,15 +203,14 @@ def main_worker(local_rank: int, config: object):
         logger=logger,
         memory_set=finetune_set,
         query_set=test_set,
+        knn_k=config.knn_k,
     )
     elapsed_sec = time.time() - start
 
     if logger is not None:
         elapsed_mins = elapsed_sec / 60
         elapsed_hours = elapsed_mins / 60
-        logger.info(
-            f'Total training time: {elapsed_mins:,.2f} minutes ({elapsed_hours:,.2f} hours).'
-        )
+        logger.info(f'Total training time: {elapsed_mins:,.2f} minutes ({elapsed_hours:,.2f} hours).')
         logger.handlers.clear()
 
 

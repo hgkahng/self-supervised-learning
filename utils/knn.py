@@ -22,37 +22,8 @@ class KNNEvaluator(object):
         self.temperature = temperature
 
     @torch.no_grad()
-    def predict(self,
-                k: int,
-                query: torch.FloatTensor,
-                memory_bank: torch.FloatTensor,
-                memory_labels: torch.LongTensor):
-
-        C = self.num_classes
-        T = self.temperature
-        B, _ = query.size()
-
-        # Compute cosine similarity
-        sim_matrix = torch.einsum('bf,fm->bm', [query, memory_bank])       # (b, f) @ (f, M) -> (b, M)
-        sim_weight, sim_indices = sim_matrix.sort(dim=1, descending=True)  # (b, M), (b, M)
-        sim_weight, sim_indices = sim_weight[:, :k], sim_indices[:, :k]    # (b, k), (b, k)
-        sim_weight = (sim_weight / T).exp()                                # (b, k)
-        sim_labels = torch.gather(
-            memory_labels.expand(B, -1),                                   # (1, M) -> (b, M)
-            dim=1,
-            index=sim_indices
-        )                                                                  # (b, M)
-
-        one_hot = torch.zeros(B * k, C, device=sim_labels.device)       # (bk, C)
-        one_hot.scatter_(dim=-1, index=sim_labels.view(-1, 1), value=1) # (bk, C) <- scatter <- (bk, 1)
-        pred = one_hot.view(B, k, C) * sim_weight.unsqueeze(dim=-1)     # (b, k, C) * (b, k, 1)
-        pred = pred.sum(dim=1)                                          # (b, C)
-
-        return pred.argsort(dim=-1, descending=True)                    # (b, C); first column gives label of highest confidence
-
-    @torch.no_grad()
     def evaluate(self,
-                 net,
+                 net: nn.Module,
                  memory_loader: torch.utils.data.DataLoader,
                  query_loader: torch.utils.data.DataLoader):
         """
@@ -60,11 +31,11 @@ class KNNEvaluator(object):
         Arguments:
             net: a `nn.Module` instance.
             memory_loader: a `DataLoader` instance of train data. Apply
-                 minimal augmentation as if used for training for linear evaluation.
-                 (i.e., HorizontalFlip(0.5), etc.)
+                    minimal augmentation as if used for training for linear evaluation.
+                    (i.e., HorizontalFlip(0.5), etc.)
             query_loader: a `DataLoader` instance of test data. Apply
-                 minimal data augmentation as used for testing for linear evaluation.
-                 (i.e., Resize + Crop (0.875 x size), etc.)
+                    minimal data augmentation as used for testing for linear evaluation.
+                    (i.e., Resize + Crop (0.875 x size), etc.)
         """
 
         net.eval()
@@ -90,22 +61,49 @@ class KNNEvaluator(object):
 
             # 2. Extract query features (test data to evaluate) and
             #  and evalute against memory features.
-            scores = []
-            for k in self.num_neighbors:
-                total_correct = 0
-                for _, batch in enumerate(query_loader):
-                    z = net(batch['x'].to(device))
-                    z = F.normalize(z, dim=1)
-                    y = batch['y'].to(device)
+            scores = dict()
+            corrects = [0] * len(self.num_neighbors)
+            for _, batch in enumerate(query_loader):
+                z = F.normalize(net(batch['x'].to(device)), dim=1)
+                y = batch['y'].to(device)
+                for i, k in enumerate(self.num_neighbors):
                     y_pred = self.predict(k,
-                                          query=z,
-                                          memory_bank=memory_bank,
-                                          memory_labels=memory_labels)[:, 0].squeeze()
-                    total_correct += y.eq(y_pred).sum().item()
-                    pg.update(task_2, advance=1.) 
-                score = total_correct / len(query_loader.dataset)
-                scores += [score]
+                                            query=z,
+                                            memory_bank=memory_bank,
+                                            memory_labels=memory_labels)[:, 0].squeeze()
+                    corrects[i] += y.eq(y_pred).sum().item()
+                pg.update(task_2, advance=1.) 
+            
+            for i, k in enumerate(self.num_neighbors):
+                scores[k] = corrects[i] / len(query_loader.dataset)
 
-        if len(scores) == 1:
-            return scores[0]
-        return scores
+            return scores  # dict
+
+    @torch.no_grad()
+    def predict(self,
+                k: int,
+                query: torch.FloatTensor,
+                memory_bank: torch.FloatTensor,
+                memory_labels: torch.LongTensor):
+
+        C = self.num_classes
+        T = self.temperature
+        B, _ = query.size()
+
+        # Compute cosine similarity
+        sim_matrix = torch.einsum('bf,fm->bm', [query, memory_bank])       # (b, f) @ (f, M) -> (b, M)
+        sim_weight, sim_indices = sim_matrix.sort(dim=1, descending=True)  # (b, M), (b, M)
+        sim_weight, sim_indices = sim_weight[:, :k], sim_indices[:, :k]    # (b, k), (b, k)
+        sim_weight = (sim_weight / T).exp()                                # (b, k)
+        sim_labels = torch.gather(
+            memory_labels.expand(B, -1),                                   # (1, M) -> (b, M)
+            dim=1,
+            index=sim_indices
+        )                                                                  # (b, M)
+
+        one_hot = torch.zeros(B * k, C, device=sim_labels.device)          # (bk, C)
+        one_hot.scatter_(dim=-1, index=sim_labels.view(-1, 1), value=1)    # (bk, C) <- scatter <- (bk, 1)
+        pred = one_hot.view(B, k, C) * sim_weight.unsqueeze(dim=-1)        # (b, k, C) * (b, k, 1)
+        pred = pred.sum(dim=1)                                             # (b, C)
+
+        return pred.argsort(dim=-1, descending=True)                       # (b, C); first column gives label of highest confidence

@@ -171,7 +171,7 @@ class MoCo(Task):
             weight_decay=weight_decay
         )
         # Learning rate scheduling; if cosine_warmup < 0: scheduler = None.
-        self.scheduler = get_cosine_scheduler(self.optimizer, epochs=epochs, warmup_steps=cosine_warmup)
+        self.scheduler = get_cosine_scheduler(self.optimizer, epochs=self.epochs, warmup_steps=cosine_warmup)
 
         # Resuming from previous checkpoint (optional)
         if resume is not None:
@@ -202,12 +202,10 @@ class MoCo(Task):
 
     def run(self,
             dataset: torch.utils.data.Dataset,
+            memory_set: torch.utils.data.Dataset = None,
+            query_set: torch.utils.data.Dataset = None,
             save_every: int = 100,
             **kwargs):
-
-        epochs = self.epochs
-        batch_size = self.batch_size
-        num_workers = self.num_workers
 
         if not self.prepared:
             raise RuntimeError("Training not prepared.")
@@ -226,32 +224,19 @@ class MoCo(Task):
         )
 
         # DataLoader (for supervised evaluation)
-        if (kwargs.get('query_set') is not None) and \
-            (kwargs.get('memory_set') is not None):
-            query_loader = DataLoader(
-                kwargs['query_set'],
-                batch_size=self.batch_size,
-                shuffle=False,
-                num_workers=self.num_workers,
-                drop_last=False,
-                pin_memory=True,
-            )
-            memory_loader = DataLoader(
-                kwargs['memory_set'],
-                batch_size=self.batch_size,
-                shuffle=False,
-                num_workers=self.num_workers,
-                drop_last=False,
-                pin_memory=True,
-            )
+        if (memory_set is not None) and (query_set is not None):
+            memory_loader = DataLoader(memory_set, batch_size=self.batch_size*2, num_workers=self.num_workers)
+            query_loader = DataLoader(query_set, batch_size=self.batch_size*2)
+            knn_eval = True
         else:
             query_loader = None
             memory_loader = None
+            knn_eval = False
 
         # Logging
         logger = kwargs.get('logger', None)
 
-        for epoch in range(1, epochs + 1):
+        for epoch in range(1, self.epochs + 1):
 
             if self.distributed and (sampler is not None):
                 sampler.set_epoch(epoch)
@@ -261,27 +246,28 @@ class MoCo(Task):
             log = " | ".join([f"{k} : {v:.4f}" for k, v in history.items()])
 
             # Evaluate
-            if (query_loader is not None) and (memory_loader is not None):
-                if self.local_rank == 0:
-                    knn = KNNEvaluator(num_neighbors=5,
-                                       num_classes=query_loader.dataset.num_classes)
-                    knn_score = knn.evaluate(self.net_q,
-                                             query_loader=query_loader,
-                                             memory_loader=memory_loader)
-                    log += f" | knn@5: {knn_score*100:.2f}%"
+            if (self.local_rank == 0) and knn_eval:
+                knn_k = kwargs.get('knn_k', [5, 200])
+                knn = KNNEvaluator(knn_k, num_classes=query_loader.dataset.num_classes)
+                knn_scores = knn.evaluate(self.net_q,
+                                          memory_loader=memory_loader,
+                                          query_loader=query_loader)
+                for k, score in knn_scores.items():
+                    log += f" | knn@{k}: {score*100:.2f}%"
             else:
-                knn_score = None
+                knn_scores = None
 
             # Logging
             if logger is not None:
-                logger.info(f"Epoch [{epoch:>4}/{epochs:>4}] - " + log)
+                logger.info(f"Epoch [{epoch:>4}/{self.epochs:>4}] - " + log)
 
             # TensorBoard
             if self.writer is not None:
                 for k, v in history.items():
                     self.writer.add_scalar(k, v, global_step=epoch)
-                if knn_score is not None:
-                    self.writer.add_scalar('knn@5', knn_score, global_step=epoch)
+                if knn_scores is not None:
+                    for k, score in knn_scores.items():
+                        self.writer.add_scalar(f'knn@{k}', score, global_step=epoch)
                 if self.scheduler is not None:
                     lr = self.scheduler.get_last_lr()[0]
                     self.writer.add_scalar('lr', lr, global_step=epoch)

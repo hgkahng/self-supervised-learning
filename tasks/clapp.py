@@ -64,23 +64,16 @@ class CLAPPLoss(nn.Module):
 
         # b & d
         logits_pseudo_neg = torch.einsum('bf,fk->bk', [pseudo, negatives])  # (B, K)
-
-        # if no pseudo-positives selected -> loss_pseudo = torch[nan]; check nan later.
         if self.contrast_mode == 'queue':
             logits_pseudo_neg.div_(self.pseudo_temperature)
             loss_pseudo, probs_pseudo_neg = self._pseudo_loss_against_queue(logits, logits_pseudo_neg, threshold)
             return loss, logits, labels, loss_pseudo, probs_pseudo_neg
-        
         elif self.contrast_mode == 'queue-v2':
             logits_pseudo_neg.div_(self.pseudo_temperature)
             loss_pseudo, mask_pseudo_neg = self._pseudo_loss_against_queue_v2(logits, logits_pseudo_neg, threshold)
             return loss, logits, labels, loss_pseudo, mask_pseudo_neg
-
-        elif self.contrast_mode == 'batch':
-            logits_pseudo_neg.div_(self.pseudo_temperature)
-            probs_pseudo_neg = self._normalize(logits_pseudo_neg, dim=0)
-            loss_pseudo = self._pseudo_loss_against_batch(logits[:, 1:], probs_pseudo_neg, threshold)
-            return loss, logits, labels, loss_pseudo, probs_pseudo_neg
+        else:
+            raise NotImplementedError
 
     def _normalize(self, x: torch.FloatTensor, dim: int = 0):
         if self.normalize == 'softmax':
@@ -115,10 +108,13 @@ class CLAPPLoss(nn.Module):
         mask_pseudo = mask_pseudo.bool()
         num_pseudo_per_anchor = mask_pseudo.sum(dim=1, keepdim=True)
 
-        nll = -1. * F.log_softmax(logits, dim=1).div(1e-5 + num_pseudo_per_anchor)
-        nll = nll[:, 1:].masked_select(mask_pseudo).mean()
+        nll = -1. * F.log_softmax(logits, dim=1).div(num_pseudo_per_anchor + 1e-5)
+        nll = nll[:, 1:].masked_select(mask_pseudo)
 
-        return nll, mask_pseudo  # (1, ) or tensor(nan)
+        if len(nll) > 0:
+            return nll.mean(), mask_pseudo
+        else:
+            return torch.tensor([float('nan')], dtype=logits.dtype, device=logits.device), mask_pseudo
 
     def _pseudo_loss_against_queue(self,
                                    logits: torch.FloatTensor,
@@ -131,26 +127,13 @@ class CLAPPLoss(nn.Module):
         probs_pseudo_neg = self._normalize(logits_pseudo_neg, dim=0)
         mask_pseudo_neg = probs_pseudo_neg.ge(threshold)                            # (B, K)
         num_pseudo_per_anchor = mask_pseudo_neg.sum(dim=1, keepdim=True)            # (B, 1)
-        nll = -1. * F.log_softmax(logits, dim=1).div(1e-5 + num_pseudo_per_anchor)  # (B, 1+K)
+        nll = -1. * F.log_softmax(logits, dim=1).div(num_pseudo_per_anchor + 1e-5)  # (B, 1+K)
         nll = nll[:, 1:].masked_select(mask_pseudo_neg)                             # (?, )
         
         if len(nll) > 0:
             return nll.mean(), probs_pseudo_neg
         else:
-            return torch.tensor([float('nan')], device=logits.device), probs_pseudo_neg
-
-    def _pseudo_loss_against_batch(self,
-                                   logits_neg: torch.FloatTensor,
-                                   probs_pseudo_neg: torch.FloatTensor,
-                                   threshold: float = 0.95):
-        """
-        Numerator = exp{ anchor@pseudo / t }
-        Denominator = sum[ exp{ batch@pseudo } ].
-        """
-        max_prob, max_idx = probs_pseudo_neg.max(dim=0)
-        loss_pseudo = F.cross_entropy(logits_neg.T, max_idx, reduction='none')  # (K, B), (K, ) -> (K, )
-        loss_pseudo = loss_pseudo.masked_select(max_prob.ge(threshold)).mean()  # (k,  ); k << K
-        return loss_pseudo  # (1, ) or tensor(nan)
+            return torch.tensor([float('nan')], dtype=logits.dtype, device=logits.device), probs_pseudo_neg
 
 
 class CLAPP(Task):
@@ -286,7 +269,7 @@ class CLAPP(Task):
 
         # Data loader for knn-based evaluation
         if (self.local_rank == 0) and (memory_set is not None) and (query_set is not None):
-            memory_loader = DataLoader(memory_set, batch_size=self.batch_size * 2, num_workers=4)
+            memory_loader = DataLoader(memory_set, batch_size=self.batch_size * 2, num_workers=self.num_workers)
             query_loader = DataLoader(query_set, batch_size=self.batch_size * 2)
             knn_eval = True
         else:
@@ -307,11 +290,13 @@ class CLAPP(Task):
             
             # Evaluate
             if (self.local_rank == 0) and knn_eval:
-                knn = KNNEvaluator(5, num_classes=memory_loader.dataset.num_classes)
-                knn_score = knn.evaluate(self.net_q, memory_loader=memory_loader, query_loader=query_loader)
-                log += f" | knn@5: {knn_score*100:.2f}% |"
+                knn_k = kwargs.get('knn_k', [5, 200])
+                knn = KNNEvaluator(knn_k, num_classes=memory_loader.dataset.num_classes)
+                knn_scores = knn.evaluate(self.net_q, memory_loader=memory_loader, query_loader=query_loader)
+                for k, score in knn_scores.items():
+                    log += f" | knn@{k}: {score*100:.2f}%"
             else:
-                knn_score = None
+                knn_scores = None
             
             # Terminal
             if logger is not None:
@@ -321,8 +306,9 @@ class CLAPP(Task):
             if self.writer is not None:
                 for k, v in history.items():
                     self.writer.add_scalar(k, v, global_step=epoch)
-                if knn_score is not None:
-                    self.writer.add_scalar('knn@5', knn_score, global_step=epoch)
+                if knn_scores is not None:
+                    for k, score in knn_scores.items():
+                        self.writer.add_scalar(f'knn@{k}', score, global_step=epoch)
                 if self.scheduler is not None:
                     lr = self.scheduler.get_last_lr()[0]
                     self.writer.add_scalar('lr', lr, global_step=epoch)
@@ -373,10 +359,16 @@ class CLAPP(Task):
 
         return {k: self.nanmean(v).item() for k, v in result.items()}
 
-    def train_step(self, batch: dict, epoch: int):
+    def train_step(self, batch: dict, epoch: int, symmetric: bool = False):
         """A single forward & backward pass."""
+
         with torch.cuda.amp.autocast(self.mixed_precision):
             
+            # Update momentum {key, pseudo} networks
+            with torch.no_grad():
+                self._momentum_update_key_net()
+                self._momentum_update_pseudo_net()
+
             # Get data (3 views)
             x_q  = batch['x1'].to(self.local_rank)
             x_k  = batch['x2'].to(self.local_rank)
@@ -386,10 +378,6 @@ class CLAPP(Task):
             z_q = F.normalize(self.net_q(x_q), dim=1)
 
             with torch.no_grad():
-                
-                # Update momentum {pseudo, key} networks
-                self._momentum_update_key_net()
-                self._momentum_update_pseudo_net()
                 
                 # Shuffle across nodes (gpus)
                 x_k, idx_unshuffle_k = ForMoCo.batch_shuffle_ddp(x_k)
