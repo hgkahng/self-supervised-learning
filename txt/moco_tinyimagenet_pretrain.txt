@@ -1,0 +1,23 @@
+--data tinyimagenet
+--input_size 64
+--backbone_type resnet50
+--epochs 2000
+--batch_size 256
+--num_workers 8
+--gpus 0
+--optimizer sgd
+--learning_rate 0.03
+--weight_decay  1e-4
+--cosine_warmup 10
+--save_every 50
+--projector_type mlp
+--projector_dim 128
+--temperature 0.2
+--key_momentum 0.999
+--num_negatives 65536
+--query_augment moco
+--key_augment moco
+--knn_k 5 200
+--split_bn
+--enable_wandb
+--mixed_precision
