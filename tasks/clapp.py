@@ -27,6 +27,7 @@ class CLAPPLoss(nn.Module):
                  temperature: float,
                  pseudo_temperature: float,
                  normalize: str = 'softmax',
+                 contrast_mode: str = 'queue',
                  select_from: int = 100,
                  select_trials: int = 10,
                  ):
@@ -37,7 +38,7 @@ class CLAPPLoss(nn.Module):
         self.normalize = normalize
         self.select_from = select_from
         self.select_trials = select_trials
-        self.contrast_mode = 'queue'
+        self.contrast_mode = contrast_mode
 
     def forward(self,
                 query: torch.FloatTensor,

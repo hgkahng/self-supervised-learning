@@ -1,10 +1,10 @@
 --data cifar10
 --input_size 32
---backbone_type resnet18
---epochs 2000
+--backbone_type resnet50
+--epochs 1000
 --batch_size 256
 --num_workers 8
---gpus 0
+--gpus 1
 --optimizer sgd
 --learning_rate 0.03
 --weight_decay 1e-4

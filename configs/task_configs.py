@@ -313,6 +313,7 @@ class CLAPPConfig(PretrainConfigBase):
         parser.add_argument('--pseudo_augment', type=str, default='moco', help='Augmentation applied to pseudo labeler (x_p).')
         parser.add_argument('--select_from', type=int, default=100, help='Normalizing dimension size.')
         parser.add_argument('--select_trials', type=int, default=10, help='Number of pseudo selection trials.')
+        parser.add_argument('--contrast_mode', type=str, default='queue', choices=['queue', 'batch'], help='Queue vs. Batch.')
         parser.add_argument('--normalize', type=str, default='softmax', help='Method for normalizing logits to distribution.')
         parser.add_argument('--threshold', type=float, default=0.5, help='Threshold for pseudo labeling.')
         parser.add_argument('--split_bn', action='store_true', help='Use ghost batch normalization.')

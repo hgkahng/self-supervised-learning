@@ -1,10 +1,10 @@
 --data cifar10
 --input_size 32
---backbone_type resnet18
---epochs 2000
+--backbone_type resnet50
+--epochs 1000
 --batch_size 256
 --num_workers 8
---gpus 1
+--gpus 0
 --optimizer sgd
 --learning_rate 0.03
 --weight_decay 1e-4
@@ -20,8 +20,7 @@
 --query_augment rand
 --key_augment moco
 --pseudo_augment moco
---select_from 100
---select_trials 10
+--contrast_mode batch
 --normalize softmax
 --threshold 0.7
 --knn_k 5 200
@@ -29,4 +28,3 @@
 --split_bn
 --enable_wandb
 --mixed_precision
-
