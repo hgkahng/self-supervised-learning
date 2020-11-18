@@ -158,7 +158,7 @@ class CIFAR10ForMoCo(_CIFAR10):
         return dict(x1=x1, x2=x2, y=target, idx=idx)
 
 
-class CIFAR100ForMoCo(_CIFAR10):
+class CIFAR100ForMoCo(_CIFAR100):
     def __init__(self,
                  root: str,
                  train: bool,
@@ -215,7 +215,7 @@ class CIFAR100ForCLAPP(_CIFAR100):
                  train: bool,
                  query_transform: object,
                  key_transform: object,
-                 pseudo_transform: object,):
+                 pseudo_transform: object):
         super(CIFAR100ForCLAPP, self).__init__(root=root,
                                                train=train,
                                                transform=None,

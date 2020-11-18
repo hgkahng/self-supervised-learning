@@ -110,10 +110,10 @@ def main_worker(local_rank: int, config: object):
     test_trans = TestAugment(**trans_kwargs)
 
     if config.data == 'cifar10':
-        train_set = CIFAR100ForMoCo('./data/cifar10',
-                                    train=True,
-                                    query_transform=query_trans,
-                                    key_transform=key_trans)
+        train_set = CIFAR10ForMoCo('./data/cifar10',
+                                   train=True,
+                                   query_transform=query_trans,
+                                   key_transform=key_trans)
         finetune_set = CIFAR10('./data/cifar10', train=True, transform=finetune_trans)
         test_set = CIFAR10('./data/cifar10', train=False, transform=test_trans)
     elif config.data == 'cifar100':
