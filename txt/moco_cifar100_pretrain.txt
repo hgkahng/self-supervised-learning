@@ -1,5 +1,5 @@
---data tinyimagenet
---input_size 64
+--data cifar100
+--input_size 32
 --backbone_type resnet50
 --epochs 1000
 --batch_size 256
@@ -12,19 +12,12 @@
 --save_every 50
 --projector_type mlp
 --projector_dim 128
---num_negatives 8192
 --temperature 0.2
---pseudo_temperature 0.1
 --key_momentum 0.999
---pseudo_momentum 0.5
---query_augment rand
+--num_negatives 4096
+--query_augment moco
 --key_augment moco
---pseudo_augment moco
---contrast_mode batch
---normalize softmax
---threshold 0.7
 --knn_k 5 200
---ramp_up 50
 --split_bn
 --enable_wandb
 --mixed_precision
