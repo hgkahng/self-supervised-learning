@@ -74,7 +74,7 @@ class CLAPPLoss(nn.Module):
             return loss, logits, labels, loss_pseudo, mask_pseudo_neg
         elif self.contrast_mode == 'batch':
             logits_pseudo_neg.div_(self.pseudo_temperature)
-            loss_pseudo, probs_pseudo_neg = self._pseudo_loss_against_queue(logits, logits_pseudo_neg, threshold)
+            loss_pseudo, probs_pseudo_neg = self._pseudo_loss_against_batch(logits, logits_pseudo_neg, threshold)
             return loss, logits, labels, loss_pseudo, probs_pseudo_neg
         else:
             raise NotImplementedError
@@ -128,14 +128,17 @@ class CLAPPLoss(nn.Module):
         Numerator = exp{ anchor@pseudo / t }
         Denominator = exp{ anchor@pos / t } + sum[ exp{ anchor@queue } ].
         """
+        _, k = logits_pseudo_neg.size()
         probs_pseudo_neg = self._normalize(logits_pseudo_neg, dim=0)                # normalize against batch
         mask_pseudo_neg = probs_pseudo_neg.ge(threshold)                            # (B, K)
         num_pseudo_per_anchor = mask_pseudo_neg.sum(dim=1, keepdim=True)            # (B, 1)
-        nll = -1. * F.log_softmax(logits, dim=1).div(num_pseudo_per_anchor + 1e-5)  # (B, 1+K)
+        #nll = -1. * F.log_softmax(logits, dim=1).div(num_pseudo_per_anchor + 1e-5)  # (B, 1+K)
+        nll = -1. * F.log_softmax(logits, dim=1)  # (B, 1+K)
         nll = nll[:, 1:].masked_select(mask_pseudo_neg)                             # (?, )
         
         if len(nll) > 0:
-            return nll.mean(), probs_pseudo_neg
+            return nll.sum().div(k), probs_pseudo_neg
+            # return nll.mean(), probs_pseudo_neg
         else:
             return torch.tensor([float('nan')], dtype=logits.dtype, device=logits.device), probs_pseudo_neg
 
