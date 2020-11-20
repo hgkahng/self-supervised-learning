@@ -14,7 +14,7 @@
 --projector_dim 128
 --num_negatives 8192
 --temperature 0.2
---pseudo_temperature 0.1
+--pseudo_temperature 0.01
 --key_momentum 0.999
 --pseudo_momentum 0.5
 --query_augment rand
@@ -22,7 +22,7 @@
 --pseudo_augment moco
 --contrast_mode batch
 --normalize softmax
---threshold 0.7
+--threshold 0.9
 --knn_k 5 200
 --ramp_up 50
 --split_bn
