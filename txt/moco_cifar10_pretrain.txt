@@ -9,7 +9,7 @@
 --learning_rate 0.03
 --weight_decay 1e-4
 --cosine_warmup 10
---save_every 50
+--save_every 100
 --projector_type mlp
 --projector_dim 128
 --temperature 0.2

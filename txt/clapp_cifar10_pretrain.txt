@@ -9,7 +9,7 @@
 --learning_rate 0.03
 --weight_decay 1e-4
 --cosine_warmup 10
---save_every 50
+--save_every 100
 --projector_type mlp
 --projector_dim 128
 --num_negatives 4096
@@ -22,8 +22,9 @@
 --pseudo_augment moco
 --contrast_mode batch
 --normalize softmax
---threshold 0.9
+--threshold 0.5
 --knn_k 5 200
 --ramp_up 50
 --split_bn
+--enable_wandb
 --mixed_precision
