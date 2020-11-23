@@ -5,13 +5,13 @@
 --epochs 100
 --batch_size 256
 --num_workers 4
---gpus 0
+--gpus 1
 --optimizer sgd
 --learning_rate 30.0
 --weight_decay 0
 --cosine_warmup 0
 --pretrained_file /path/to/ckpt
---pretrained_task clapp
+--pretrained_task moco
 --labels 1.00
 --save_every 100
 --freeze
