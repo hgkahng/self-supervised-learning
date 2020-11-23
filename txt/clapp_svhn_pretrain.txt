@@ -22,7 +22,7 @@
 --pseudo_augment moco
 --contrast_mode batch
 --normalize softmax
---threshold 0.9
+--threshold 0.5
 --knn_k 5 200
 --ramp_up 50
 --split_bn
