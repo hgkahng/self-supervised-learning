@@ -42,6 +42,7 @@ def main():
     setattr(config, 'num_gpus_per_node', num_gpus_per_node)
     setattr(config, 'world_size', world_size)
     setattr(config, 'distributed', distributed)
+    setattr(config, 'finetune', not config.freeze)
 
     rich.print(config.__dict__)
     config.save()
@@ -164,6 +165,7 @@ def main_worker(local_rank: int, config: object):
         train_set=train_set,
         eval_set=eval_set,
         test_set=test_set,
+        finetune=config.finetune,
         save_every=config.save_every,
         logger=logger
     )

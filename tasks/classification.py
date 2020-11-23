@@ -103,6 +103,7 @@ class Classification(Task):
             eval_set,
             test_set: torch.utils.data.Dataset = None,
             save_every: int = 10,
+            finetune: bool = False,
             **kwargs):  # pylint: disable=unused-argument
 
         epochs = self.epochs
@@ -146,7 +147,7 @@ class Classification(Task):
                 sampler.set_epoch(epoch)
 
             # Train & evaluate
-            train_history = self.train(train_loader)
+            train_history = self.train(train_loader, finetune=finetune)
             eval_history  = self.evaluate(eval_loader)
             epoch_history = collections.defaultdict(dict)
             for k, v1 in train_history.items():
@@ -214,11 +215,11 @@ class Classification(Task):
                 log += f" {k}: {v:.4f} |"
             logger.info(log)
 
-    def train(self, data_loader):
+    def train(self, data_loader, finetune: bool = False):
         """Training defined for a single epoch."""
 
         steps = len(data_loader)
-        self._set_learning_phase(train=True)
+        self._set_learning_phase(train=finetune)
         result = {
             'loss': torch.zeros(steps, device=self.local_rank),
             'top@1': torch.zeros(steps, device=self.local_rank),
