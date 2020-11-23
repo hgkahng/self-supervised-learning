@@ -13,10 +13,11 @@ import torch.distributed as dist
 
 from rich.console import Console
 
-from datasets.cifar import CIFAR10Pair, CIFAR10, CIFAR10ForMoCo
-from datasets.cifar import CIFAR100Pair, CIFAR100, CIFAR100ForMoCo
-from datasets.stl10 import STL10ForMoCo, STL10Pair, STL10
-from datasets.imagenet import TinyImageNetForMoCo, TinyImageNetPair, TinyImageNet
+from datasets.cifar import CIFAR10ForMoCo, CIFAR10
+from datasets.cifar import CIFAR100ForMoCo, CIFAR100
+from datasets.svhn import SVHNForMoCo, SVHN
+from datasets.stl10 import STL10ForMoCo, STL10
+from datasets.imagenet import TinyImageNetForMoCo, TinyImageNet
 from datasets.transforms import MoCoAugment, RandAugment, FinetuneAugment, TestAugment
 from configs.task_configs import MoCoConfig
 from models.backbone import ResNetBackbone
@@ -123,6 +124,13 @@ def main_worker(local_rank: int, config: object):
                                     key_transform=key_trans)
         finetune_set = CIFAR100('./data/cifar100', train=True, transform=finetune_trans)
         test_set = CIFAR100('./data/cifar100', train=False, transform=test_trans)
+    elif config.data == 'svhn':
+        train_set = SVHNForMoCo('./data/svhn',
+                                split='train',
+                                query_transform=query_trans,
+                                key_transform=key_trans)
+        finetune_set = SVHN('./data/svhn', split='train', transform=finetune_trans)
+        test_set = SVHN('./data/svhn', split='test', transform=test_trans)
     elif config.data == 'stl10':
         train_set = STL10ForMoCo('./data/stl10',
                                  split='train+unlabeled',

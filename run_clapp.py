@@ -14,6 +14,8 @@ from rich.console import Console
 
 from datasets.cifar import CIFAR10ForCLAPP, CIFAR10
 from datasets.cifar import CIFAR100ForCLAPP, CIFAR100
+from datasets.svhn import SVHNForCLAPP, SVHN
+from datasets.stl10 import STL10ForCLAPP, STL10
 from datasets.imagenet import TinyImageNet, TinyImageNetForCLAPP
 from datasets.transforms import MoCoAugment, RandAugment, WeakAugment
 from datasets.transforms import FinetuneAugment, TestAugment
@@ -109,7 +111,6 @@ def main_worker(local_rank: int, config: object):
     query_trans  = AUGMENTS[config.query_augment](**trans_kwargs)
     key_trans    = AUGMENTS[config.key_augment](**trans_kwargs)
     pseudo_trans = AUGMENTS[config.pseudo_augment](**trans_kwargs)
-    pretrain_trans = MoCoAugment(**trans_kwargs)
     finetune_trans = FinetuneAugment(**trans_kwargs)
     test_trans = TestAugment(**trans_kwargs)
 
@@ -129,8 +130,22 @@ def main_worker(local_rank: int, config: object):
                                      pseudo_transform=pseudo_trans)
         finetune_set = CIFAR100('./data/cifar100', train=True, transform=finetune_trans)
         test_set     = CIFAR100('./data/cifar100', train=False, transform=test_trans)
+    elif config.data == 'svhn':
+        train_set = SVHNForCLAPP('./data/svhn',
+                                 split='train',
+                                 query_transform=query_trans,
+                                 key_transform=key_trans,
+                                 pseudo_transform=pseudo_trans)
+        finetune_set = SVHN('./data/svhn', split='train', transform=finetune_trans)
+        test_set = SVHN('./data/svhn', split='test', transform=test_trans)
     elif config.data == 'stl10':
-        raise NotImplementedError
+        train_set = STL10ForCLAPP('./data/stl10',
+                                  split='train+unlabeled',
+                                  query_transform=query_trans,
+                                  key_transform=key_trans,
+                                  pseudo_transform=pseudo_trans)
+        finetune_set = STL10('./data/stl10', split='train', transform=finetune_trans)
+        test_set = STL10('./data/stl10', split='test', transform=test_trans)
     elif config.data == 'tinyimagenet':
         train_set = TinyImageNetForCLAPP('./data/tiny-imagenet-200',
                                          split='train',

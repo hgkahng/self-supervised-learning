@@ -112,14 +112,14 @@ class ConfigBase(object):
     def data_parser() -> argparse.ArgumentParser:
         """Returns an `argparse.ArgumentParser` instance containing data-related arguments."""
         parser = argparse.ArgumentParser("Data", add_help=False)
-        parser.add_argument('--data', type=str, choices=('wm811k', 'cifar10', 'cifar100', 'stl10', 'tinyimagenet', 'imagenet'), required=True)
+        parser.add_argument('--data', type=str, choices=('cifar10', 'cifar100', 'svhn', 'stl10', 'tinyimagenet', 'imagenet'), required=True)
         parser.add_argument('--input_size', type=int, choices=(32, 64, 96, 224), required=True)
         parser.add_argument('--augmentation', type=str, default='torchvision',
                             choices=('torchvision', 'albumentations'), help='Package used for augmentation.')
         return parser
 
     @staticmethod
-    def model_parser() -> argparse.ArgumentParser:  # FIXME
+    def model_parser() -> argparse.ArgumentParser:
         """Returns an `argparse.ArgumentParser` instance containing model-related arguments."""
         parser = argparse.ArgumentParser("CNN Backbone", add_help=False)
         parser.add_argument('--backbone_type', type=str, default='resnet50', choices=('resnet18', 'resnet50'), required=True)

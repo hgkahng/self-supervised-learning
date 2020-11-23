@@ -20,7 +20,7 @@ def get_evaluation_crop_torchvision(size: tuple, data: str):
             transforms.Resize((256, 256)),
             transforms.CenterCrop(size),
         ])
-    else:  # cifar10, cifar100 (32), stl10 (96), tinyimagenet (64)
+    else:  # cifar10(32), cifar100(32), svhn(32), stl10(96), tinyimagenet(64)
         return transforms.RandomCrop(size=size,
                                      padding=int(size[0] * 0.125),
                                      padding_mode='reflect')

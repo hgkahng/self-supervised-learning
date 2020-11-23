@@ -15,6 +15,13 @@ from datasets.transforms.torchvision import GaussianBlur
 from datasets.transforms.albumentations import NumpyToTensor
 
 
+def apply_blur(data: str):
+    if data.startswith('cifar') or data.startswith('svhn'):
+        return False
+    else:
+        return True
+
+
 class WeakAugment(ImageAugment):
     def __init__(self,
                  size: int or tuple = (224, 224),
@@ -58,8 +65,8 @@ class MoCoAugment(ImageAugment):
                  data: str = 'imagenet',
                  impl: str = 'torchvision'):
         super(MoCoAugment, self).__init__(size, data, impl)
-
-        self.blur = not self.data.startswith('cifar')  # FIXME: blur for TinyImageNet?
+        
+        self.blur = apply_blur(self.data)
         if self.impl == 'torchvision':
             self.transform = self.with_torchvision()
         elif self.impl == 'albumentations':
@@ -119,8 +126,8 @@ class SimCLRAugment(ImageAugment):
                  data: str = 'imagenet',
                  impl: str = 'torchvision'):
         super(SimCLRAugment, self).__init__(size, data, impl)
-
-        self.blur = not self.data.startswith('cifar')  # FIXME: blur for TinyImageNet?
+        
+        self.blur = apply_blur(self.data)
         if self.impl == 'torchvision':
             self.transform = self.with_torchvision()
         elif self.impl == 'albumentations':

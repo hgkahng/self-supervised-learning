@@ -41,8 +41,8 @@ class ResNetBackbone(BackboneBase):
     def __init__(self, name: str = 'resnet50', data: str = 'imagenet', in_channels: int = 3):
         super(ResNetBackbone, self).__init__(in_channels)
 
-        self.name = name
-        self.data = data
+        self.name = name  # resnet18, resnet50, resnet101
+        self.data = data  # cifar10, cifar100, svhn, stl10, tinyimagenet, imagenet
 
         self.layers = RESNET_FUNCTIONS[self.name](pretrained=False)
         self.layers = self._remove_gap_and_fc(self.layers)
@@ -50,7 +50,7 @@ class ResNetBackbone(BackboneBase):
             self.layers = self._fix_first_conv_in_channels(self.layers, in_channels=self.in_channels)
         if not self.data.startswith('imagenet'):
             self.layers = self._fix_first_conv_kernel_size(self.layers)
-        if self.data.startswith('cifar'):
+        if self.data.startswith('cifar') or self.data.startswith('svhn'):
             self.layers = self._remove_maxpool(self.layers)
 
         initialize_weights(self)

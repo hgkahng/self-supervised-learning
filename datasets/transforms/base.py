@@ -11,11 +11,12 @@ from torchvision import transforms
 
 class ImageAugment(object):
     
-    SUPPORTED_DATASETS = ['cifar10', 'cifar100', 'stl10', 'tinyimagenet', 'imagenet']
+    SUPPORTED_DATASETS = ['cifar10', 'cifar100', 'svhn', 'stl10', 'tinyimagenet', 'imagenet']
 
     MEAN = {
         'cifar10':      [0.4914, 0.4822, 0.4465],
         'cifar100':     [0.5071, 0.4867, 0.4408],
+        'svhn':         [0.4359, 0.4420, 0.4709],
         'stl10':        [0.485,  0.456,  0.406],
         'tinyimagenet': [0.485,  0.456,  0.406],
         'imagenet':     [0.485,  0.456,  0.406],
@@ -24,6 +25,7 @@ class ImageAugment(object):
     STD = {
         'cifar10':      [0.247, 0.243, 0.261],
         'cifar100':     [0.268, 0.257, 0.276],
+        'svhn':         [0.197, 0.200, 0.196],
         'stl10':        [0.229, 0.224, 0.225],
         'tinyimagenet': [0.229, 0.224, 0.225],
         'imagenet':     [0.229, 0.224, 0.225]
