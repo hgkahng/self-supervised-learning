@@ -174,6 +174,7 @@ def main_worker(local_rank: int, config: object):
         learning_rate=config.learning_rate,
         weight_decay=config.weight_decay,
         cosine_warmup=config.cosine_warmup,
+        cosine_cycles=config.cosine_cycles,
         epochs=config.epochs,
         batch_size=config.batch_size,
         num_workers=config.num_workers,

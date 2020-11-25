@@ -131,13 +131,14 @@ class MoCo(Task):
     def prepare(self,
                 ckpt_dir: str,
                 optimizer: str,
-                learning_rate: float,
-                weight_decay: float,
-                cosine_warmup: int,
-                epochs: int,
-                batch_size: int,
-                num_workers: int,
-                key_momentum: float,
+                learning_rate: float = 0.01,
+                weight_decay: float = 1e-4,
+                cosine_warmup: int = 10,
+                cosine_cycles: int = 1,
+                epochs: int = 1000,
+                batch_size: int = 256,
+                num_workers: int = 0,
+                key_momentum: float = 0.999,
                 distributed: bool = False,
                 local_rank: int = 0,
                 mixed_precision: bool = True,
@@ -171,7 +172,12 @@ class MoCo(Task):
             weight_decay=weight_decay
         )
         # Learning rate scheduling; if cosine_warmup < 0: scheduler = None.
-        self.scheduler = get_cosine_scheduler(self.optimizer, epochs=self.epochs, warmup_steps=cosine_warmup)
+        self.scheduler = get_cosine_scheduler(
+            self.optimizer,
+            epochs=self.epochs,
+            warmup_steps=cosine_warmup,
+            cycles=cosine_cycles
+            )
 
         # Resuming from previous checkpoint (optional)
         if resume is not None:

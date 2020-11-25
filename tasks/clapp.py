@@ -180,7 +180,7 @@ class CLAPP(Task):
                 learning_rate: float,
                 weight_decay: float,
                 cosine_warmup: int = 0,
-                cosine_restarts: int = 0,
+                cosine_cycles: int = 1,
                 epochs: int = 2000,
                 batch_size: int = 256,
                 num_workers: int = 4,
@@ -219,7 +219,7 @@ class CLAPP(Task):
             self.optimizer,
             epochs=epochs,
             warmup_steps=cosine_warmup,
-            restarts=cosine_restarts
+            cycles=cosine_cycles
         )
 
         # Resume from previous checkpoint (if 'resume' is not None)
