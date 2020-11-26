@@ -3,6 +3,7 @@
 import os
 import glob
 import cv2
+import numpy as np
 
 from PIL import Image
 from torch.utils.data import Dataset
@@ -76,13 +77,25 @@ class TinyImageNet(Dataset):
         else:
             raise NotImplementedError
 
-        if self.proportion < 1.0:
-            raise NotImplementedError
+        if self.proportion < 1.:
+            indices, _ = train_test_split(
+                np.arange(len(self.image_paths)),
+                train_size=self.proportion,
+                stratify=self.get_targets(),
+                shuffle=True,
+                random_state=2021 + kwargs.get('seed', 0)
+            )
+            self.image_paths = self.image_paths[indices]
 
         if self.in_memory:
             print(f"Loading {self.split} data to memory...", end=' ')
             self.images = [load_image_cv2(path) for path in self.image_paths]
             print(f"Done!")
+
+    def get_targets(self):
+        paths = [self.image_paths[idx] for idx in range(self.__len__)]
+        targets = [self.labels[os.path.basename(p)] for p in paths]
+        return targets
 
     def __len__(self):
         return len(self.image_paths)

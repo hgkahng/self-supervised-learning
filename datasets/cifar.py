@@ -78,6 +78,7 @@ class CIFAR100(_CIFAR100):
         self.proportion = proportion
         if self.proportion < 1.0:
             indices, _ = train_test_split(
+                np.arange(len(self.data)),
                 train_size=self.proportion,
                 stratify=self.targets,
                 shuffle=True,
