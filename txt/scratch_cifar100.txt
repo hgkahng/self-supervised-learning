@@ -1,0 +1,14 @@
+--data cifar100
+--input_size 32
+--augmentation torchvision
+--backbone_type resnet50
+--epochs 100
+--batch_size 256
+--num_workers 4
+--gpus 0
+--optimizer sgd
+--learning_rate 0.03
+--weight_decay 1e-4
+--cosine_warmup 0
+--labels 1.00
+--save_every 100
