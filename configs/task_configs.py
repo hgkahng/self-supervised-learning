@@ -398,21 +398,21 @@ class ClassificationConfig(DownstreamConfigBase):
         parser = argparse.ArgumentParser('Linear evaluation of pre-trained model.', add_help=False)
         parser.add_argument('--labels', type=float, default=1.0, help='Size of labeled data (0, 1].')
         parser.add_argument('--pretrained_file', type=str, default=None, help='Path to pretrained model file (.pt).')
-        parser.add_argument('--pretrained_task', type=str, default=None, required=True, help='Type of pretraining task.')
+        parser.add_argument('--pretrained_task', type=str, default=None, help='Type of pretraining task.')
         parser.add_argument('--freeze', action='store_true', help='Freeze weights of CNN backbone.')
         return parser
 
     @property
     def task(self):
-        if self.pretrained_task is None:
-            if self.pretrained_file is None:
+        if self.pretrained_file is not None:
+            if self.pretrained_task is None:
                 raise ValueError("Provide a proper name for the pretrained model type.")
-            return 'from_scratch'
-        else:
             if self.freeze:
-                return f'linear_{self.pretrained_task}'
+                return f"linear_{self.pretrained_task}"
             else:
-                return f'finetune_{self.pretrained_task}'
+                return f"finetune_{self.pretrained_task}"
+        else:
+            return "from_scratch"
 
 
 class MixupConfig(ClassificationConfig):
