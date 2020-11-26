@@ -10,6 +10,7 @@ import torch.distributed as dist
 import numpy as np
 
 from datasets.cifar import CIFAR10, CIFAR100
+from datasets.svhn import SVHN
 from datasets.stl10 import STL10
 from datasets.imagenet import TinyImageNet
 from datasets.transforms import FinetuneAugment, TestAugment
@@ -25,6 +26,7 @@ from utils.logging import get_rich_logger
 NUM_CLASSES = {
     'cifar10': 10,
     'cifar100': 100,
+    'svhn': 10,
     'stl10': 10,
     'tinyimagenet': 200,
     'imagenet': 1000,
@@ -93,6 +95,10 @@ def main_worker(local_rank: int, config: object):
     elif config.data == 'cifar100':
         train_set = CIFAR100('./data/cifar100', train=True, transform=finetune_trans, proportion=config.labels)
         eval_set = CIFAR100('./data/cifar100', train=False, transform=test_trans)
+        test_set = eval_set
+    elif config.data == 'svhn':
+        train_set = SVHN('./data/svhn', split='train', transform=finetune_trans, proportion=config.labels)
+        eval_set = SVHN('./data/svhn', split='test', transform=finetune_trans)
         test_set = eval_set
     elif config.data == 'stl10':
         train_set = STL10('./data/stl10', split='train', transform=finetune_trans, proportion=config.labels)

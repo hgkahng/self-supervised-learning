@@ -21,6 +21,10 @@ class SVHN(_SVHN):
         assert isinstance(self.labels, np.ndarray) and self.labels.ndim == 1
         assert isinstance(self.data, np.ndarray) and self.data.ndim == 4
         self.data = np.transpose(self.data, (0, 2, 3, 1))
+
+        if 'proportion' in kwargs:
+            if kwargs['proportion'] < 1.:
+                raise NotImplementedError
     
     def __getitem__(self, idx):
         img, label = self.data[idx], self.labels[idx]
