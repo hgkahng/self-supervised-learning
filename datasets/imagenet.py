@@ -85,7 +85,7 @@ class TinyImageNet(Dataset):
                 shuffle=True,
                 random_state=2021 + kwargs.get('seed', 0)
             )
-            self.image_paths = self.image_paths[indices]
+            self.image_paths = [self.image_paths[i] for i in indices]
 
         if self.in_memory:
             print(f"Loading {self.split} data to memory...", end=' ')
