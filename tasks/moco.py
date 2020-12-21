@@ -23,7 +23,7 @@ from utils.logging import get_rich_pbar
 
 
 class MoCoLoss(nn.Module):
-    def __init__(self,temperature: float = 0.07):
+    def __init__(self,temperature: float = 0.2):
         super(MoCoLoss, self).__init__()
         self.temperature = temperature
 
@@ -52,13 +52,13 @@ class MemoryQueue(nn.Module):
         super(MemoryQueue, self).__init__()
 
         if len(size) != 2:
-            raise ValueError(f"Invalid size for memory: {size}")
+            raise ValueError(f"Invalid size for memory: {size}. Only supports 2D.")
         self.size = size
         self.device = device
 
         with torch.no_grad():
             self.buffer = torch.randn(*self.size, device=self.device)  # (f, K)
-            self.buffer = nn.functional.normalize(self.buffer, dim=0)  # l2 normalize
+            self.buffer = F.normalize(self.buffer, dim=0)              # l2 normalize
             self.ptr = torch.zeros(1, dtype=torch.long, device=self.device)
             self.labels = torch.zeros(self.size[1], dtype=torch.long, device=self.device)  # (K, )
 
@@ -121,7 +121,7 @@ class MoCo(Task):
 
         self.loss_function = loss_function
 
-        self.scaler = None   # For float16 training
+        self.scaler = None
         self.optimizer = None
         self.scheduler = None
         self.writer = None
