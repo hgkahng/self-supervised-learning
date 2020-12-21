@@ -21,8 +21,9 @@ class Flatten(nn.Module):
 
 
 class Interpolate(nn.Module):
-    def __init__(self, output_size: tuple, mode='nearest'):
+    def __init__(self, output_size: tuple, mode: str = 'nearest'):
         super(Interpolate, self).__init__()
         self.output_size = output_size
+        self.mode = mode
     def forward(self, x):
         return F.interpolate(x.float(), self.output_size, mode=self.mode)
