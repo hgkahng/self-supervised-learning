@@ -26,7 +26,7 @@ class ConfigBase(object):
             self.hash = datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
 
     @classmethod
-    def parse_arguments(cls):
+    def parse_arguments(cls) -> argparse.Namespace:
         """Create a configuration object from command line arguments."""
         parents = [
             cls.ddp_parser(),            # task-agnostic
@@ -72,11 +72,11 @@ class ConfigBase(object):
         raise NotImplementedError
 
     @property
-    def model_name(self):
+    def model_name(self) -> str:
         return self.backbone_type
 
     @property
-    def checkpoint_dir(self):
+    def checkpoint_dir(self) -> str:
         ckpt = os.path.join(
             self.checkpoint_root,
             self.data,          # 'wm811k', 'cifar10', 'stl10', 'imagenet', ...
@@ -138,7 +138,7 @@ class ConfigBase(object):
         parser.add_argument('--weight_decay', type=float, default=1e-3, help='Weight decay factor.')
         parser.add_argument('--cosine_warmup', type=int, default=-1, help='Number of warmups before cosine LR scheduling (-1 to disable.)')
         parser.add_argument('--cosine_cycles', type=int, default=1, help='Number of hard cosine LR cycles with hard restarts.')
-        parser.add_argument('--mixed_precision', action='store_true')
+        parser.add_argument('--mixed_precision', action='store_true', help='Use float16 precision.')
         return parser
 
     @staticmethod
@@ -147,7 +147,7 @@ class ConfigBase(object):
         parser = argparse.ArgumentParser("Logging", add_help=False)
         parser.add_argument('--checkpoint_root', type=str, default='./checkpoints/', help='Top-level directory of checkpoints.')
         parser.add_argument('--save_every', type=int, default=None, help='Save model checkpoint every `save_every` epochs.')
-        parser.add_argument('--enable_wandb', action='store_true')
+        parser.add_argument('--enable_wandb', action='store_true', help='Use Weights & Biases plugin.')
         return parser
 
 
@@ -242,7 +242,7 @@ class PIRLConfig(PretrainConfigBase):
         super(PIRLConfig, self).__init__(args, **kwargs)
 
     @staticmethod
-    def task_specific_parser():
+    def task_specific_parser() -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser('PIRL', add_help=False)
         parser.add_argument('--projector_type', type=str, default='linear', choices=('linear', 'mlp'))
         parser.add_argument('--projector_dim', type=int, default=128, help='Dimension of projector head.')
@@ -252,7 +252,7 @@ class PIRLConfig(PretrainConfigBase):
         return parser
 
     @property
-    def checkpoint_dir(self):
+    def checkpoint_dir(self) -> str:
         ckpt = os.path.join(
             self.checkpoint_root,
             self.data,          # 'wm811k', 'cifar10', 'stl10', 'imagenet', ...
@@ -265,7 +265,7 @@ class PIRLConfig(PretrainConfigBase):
         return ckpt
 
     @property
-    def task(self):
+    def task(self) -> str:
         return 'pirl'
 
 
@@ -275,7 +275,7 @@ class MoCoConfig(PretrainConfigBase):
         super(MoCoConfig, self).__init__(args, **kwargs)
 
     @staticmethod
-    def task_specific_parser():
+    def task_specific_parser() -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser('MoCo', add_help=False)
         parser.add_argument('--projector_type', type=str, default='mlp', choices=('linear', 'mlp'))
         parser.add_argument('--projector_dim', type=int, default=128, help='Dimension of projection head.')
@@ -289,7 +289,7 @@ class MoCoConfig(PretrainConfigBase):
         return parser
 
     @property
-    def task(self):
+    def task(self) -> str:
         return 'moco'
 
 
@@ -299,7 +299,7 @@ class CLAPPConfig(PretrainConfigBase):
         super(CLAPPConfig, self).__init__(args, **kwargs)
 
     @staticmethod
-    def task_specific_parser():
+    def task_specific_parser() -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser('CLAPP', add_help=False)
         parser.add_argument('--projector_type', type=str, default='mlp', choices=('linear', 'mlp'))
         parser.add_argument('--projector_dim', type=int, default=128, help='Dimension of projection head.')
@@ -322,7 +322,7 @@ class CLAPPConfig(PretrainConfigBase):
         return parser
 
     @property
-    def task(self):
+    def task(self) -> str:
         return 'clapp'
 
 
@@ -332,7 +332,7 @@ class SimCLRConfig(PretrainConfigBase):
         super(SimCLRConfig, self).__init__(args, **kwargs)
 
     @staticmethod
-    def task_specific_parser():
+    def task_specific_parser() -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser('SimCLR', add_help=False)
         parser.add_argument('--projector_type', type=str, default='mlp', choices=('linear', 'mlp', 'attention'))
         parser.add_argument('--projector_dim', type=int, default=128, help='Dimension of projection head.')
@@ -340,7 +340,7 @@ class SimCLRConfig(PretrainConfigBase):
         return parser
 
     @property
-    def task(self):
+    def task(self) -> str:
         return 'simclr'
 
 
@@ -349,8 +349,8 @@ class PseudoCLRConfig(PretrainConfigBase):
         super(PseudoCLRConfig, self).__init__(args, **kwargs)
 
     @staticmethod
-    def task_specific_parser():
-        parser = argparse.ArgumentParser('SimCLR', add_help=False)
+    def task_specific_parser() -> argparse.ArgumentParser:
+        parser = argparse.ArgumentParser('PseudoCLR', add_help=False)
         parser.add_argument('--projector_type', type=str, default='mlp', choices=('linear', 'mlp'))
         parser.add_argument('--projector_dim', type=int, default=128, help='Dimension of projection head.')
         parser.add_argument('--temperature', type=float, default=0.07, help='Logit scaling factor.')
@@ -360,7 +360,7 @@ class PseudoCLRConfig(PretrainConfigBase):
         return parser
 
     @property
-    def task(self):
+    def task(self) -> str:
         return 'pseudoclr'
 
 class SemiCLRConfig(SimCLRConfig):
@@ -368,8 +368,12 @@ class SemiCLRConfig(SimCLRConfig):
     def __init__(self, args=None, **kwargs):
         super(SemiCLRConfig, self).__init__(args, **kwargs)
 
+    @staticmethod
+    def task_specific_parser() -> argparse.ArgumentParser:
+        raise NotImplementedError
+
     @property
-    def task(self):
+    def task(self) -> str:
         return 'semiclr'
 
 
@@ -378,8 +382,12 @@ class AttnCLRConfig(SimCLRConfig):
     def __init__(self, args=None, **kwargs):
         super(AttnCLRConfig, self).__init__(args, **kwargs)
 
+    @staticmethod
+    def task_specific_parser() -> argparse.ArgumentParser:
+        raise NotImplementedError
+
     @property
-    def task(self):
+    def task(self) -> str:
         return 'attnclr'
 
 
@@ -394,7 +402,7 @@ class ClassificationConfig(DownstreamConfigBase):
         super(ClassificationConfig, self).__init__(args, **kwargs)
 
     @staticmethod
-    def task_specific_parser():
+    def task_specific_parser() -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser('Linear evaluation of pre-trained model.', add_help=False)
         parser.add_argument('--labels', type=float, default=1.0, help='Size of labeled data (0, 1].')
         parser.add_argument('--pretrained_file', type=str, default=None, help='Path to pretrained model file (.pt).')
@@ -403,7 +411,7 @@ class ClassificationConfig(DownstreamConfigBase):
         return parser
 
     @property
-    def task(self):
+    def task(self) -> str:
         if self.pretrained_file is not None:
             if self.pretrained_task is None:
                 raise ValueError("Provide a proper name for the pretrained model type.")
@@ -420,5 +428,5 @@ class MixupConfig(ClassificationConfig):
         super(MixupConfig, self).__init__(args, **kwargs)
 
     @property
-    def task(self):
+    def task(self) -> str:
         return 'mixup'
