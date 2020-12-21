@@ -195,6 +195,7 @@ class RandAugmentTv(object):
                 ShearY(0.3),
                 TranslateX(0.45),
                 TranslateY(0.45),
+                Cutout(scale=(0.2, 0.2)),
             ],
             k=self.k
         )
