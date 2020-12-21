@@ -95,6 +95,9 @@ class SplitBatchNorm2d(nn.BatchNorm2d):
         return module_output
 
 
+GhostBatchNorm2d = SplitBatchNorm2d
+
+
 if __name__ == '__main__':
 
     from torchvision.models import resnet18
