@@ -14,7 +14,7 @@
 --projector_dim 128
 --num_negatives 4096
 --temperature 0.2
---pseudo_temperature 0.01
+--pseudo_temperature 0.1
 --key_momentum 0.999
 --pseudo_momentum 0.5
 --query_augment rand

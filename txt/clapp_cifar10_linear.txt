@@ -10,7 +10,7 @@
 --learning_rate 30.0
 --weight_decay 0
 --cosine_warmup 0
---pretrained_file checkpoints/cifar10/clapp/resnet50/rand_t-0.01_th-0.5/ckpt.1000.pth.tar
+--pretrained_file /path/to/ckpt
 --pretrained_task clapp
 --labels 1.00
 --freeze
