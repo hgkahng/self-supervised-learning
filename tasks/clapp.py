@@ -24,20 +24,18 @@ from utils.logging import get_rich_pbar
 
 class CLAPPLoss(nn.Module):
     def __init__(self,
-                 temperature: float,
-                 pseudo_temperature: float,
+                 temperature: float = 0.2,
+                 pseudo_temperature: float = 0.1,
                  normalize: str = 'softmax',
-                 contrast_mode: str = 'queue',
-                 select_from: int = 100,
-                 select_trials: int = 10,
+                 contrast_mode: str = 'batch',
                  ):
         super(CLAPPLoss, self).__init__()
 
         self.temperature = temperature
         self.pseudo_temperature = pseudo_temperature
         self.normalize = normalize
-        self.select_from = select_from
-        self.select_trials = select_trials
+        self.select_from = 100   # TODO: remove
+        self.select_trials = 10  # TODO: remove
         self.contrast_mode = contrast_mode
 
     def forward(self,
@@ -45,7 +43,7 @@ class CLAPPLoss(nn.Module):
                 pseudo: torch.FloatTensor,
                 key: torch.FloatTensor,
                 negatives: torch.FloatTensor,
-                threshold: float = 0.95):
+                threshold: float = 0.5):
         """
         1.Compute logits between:
             a) query vs. {key, queue}.
@@ -79,7 +77,7 @@ class CLAPPLoss(nn.Module):
         else:
             raise NotImplementedError
 
-    def _normalize(self, x: torch.FloatTensor, dim: int = 1):
+    def _normalize(self, x: torch.FloatTensor, dim: int):
         if self.normalize == 'softmax':
             return F.softmax(x, dim=dim)
         elif self.normalize == 'sparsemax':
@@ -100,7 +98,7 @@ class CLAPPLoss(nn.Module):
         Numerator = exp{ anchor@pseudo / t }
         Denominator = exp{ anchor@pos / t } + sum[ exp{ anchor@queue } ].
         """
-        b, k = logits_pseudo_neg.size()
+        _, k = logits_pseudo_neg.size()
         frac = self.select_from / k
         
         mask_pseudo = torch.zeros_like(logits_pseudo_neg)
@@ -123,24 +121,29 @@ class CLAPPLoss(nn.Module):
     def _pseudo_loss_against_batch(self,
                                    logits: torch.FloatTensor,
                                    logits_pseudo_neg: torch.FloatTensor,
-                                   threshold: float = 0.95):
+                                   threshold: float = 0.5) -> tuple:
         """
-        Numerator = exp{ anchor@pseudo / t }
+        Numerator = exp{ anchor@pseudo / t }, where pseudo \in queue.
         Denominator = exp{ anchor@pos / t } + sum[ exp{ anchor@queue } ].
         """
         _, k = logits_pseudo_neg.size()
-        probs_pseudo_neg = self._normalize(logits_pseudo_neg, dim=0)                # normalize against batch
-        mask_pseudo_neg = probs_pseudo_neg.ge(threshold)                            # (B, K)
+        probs_pseudo_neg = self._normalize(logits_pseudo_neg, dim=0)                # normalize along batch dim
+        mask_pseudo_neg = probs_pseudo_neg.ge(threshold).float()                    # (B, K)
         num_pseudo_per_anchor = mask_pseudo_neg.sum(dim=1, keepdim=True)            # (B, 1)
-        #nll = -1. * F.log_softmax(logits, dim=1).div(num_pseudo_per_anchor + 1e-5)  # (B, 1+K)
-        nll = -1. * F.log_softmax(logits, dim=1)  # (B, 1+K)
-        nll = nll[:, 1:].masked_select(mask_pseudo_neg)                             # (?, )
-        
-        if len(nll) > 0:
-            return nll.sum().div(k), probs_pseudo_neg
-            # return nll.mean(), probs_pseudo_neg
+
+        if num_pseudo_per_anchor.sum() == 0:
+            pseudo_loss = self.nan_tensor(dtype=logits.dtype, device=logits.device) # (1, )
         else:
-            return torch.tensor([float('nan')], dtype=logits.dtype, device=logits.device), probs_pseudo_neg
+            nll = -1. * F.log_softmax(logits, dim=1)[:, 1:]                         # (B, K)
+            nll = nll.mul(mask_pseudo_neg).sum(dim=1, keepdim=True)                 # (B, 1)
+            nll.div_(num_pseudo_per_anchor + 1e-5)                                  # (B, 1) ; division by n(S(i))
+            pseudo_loss = nll.mean()                                                # (1, )  ; division by B
+
+        return pseudo_loss, probs_pseudo_neg                                        # (1, ), (B, K)
+
+    @staticmethod
+    def nan_tensor(dtype, device) -> torch.FloatTensor:
+        return torch.tensor([float('nan')], dtype=dtype, device=device)
 
 
 class CLAPP(Task):
@@ -162,7 +165,7 @@ class CLAPP(Task):
         self.freeze_params(self.net_ps)
 
         # Key network (momentum-updated)
-        self.net_k = copy.deepcopy(self.net_ps)
+        self.net_k = copy.deepcopy(self.net_q)
         self.freeze_params(self.net_k)
 
         self.queue = queue
@@ -186,13 +189,16 @@ class CLAPP(Task):
                 num_workers: int = 4,
                 key_momentum: float = 0.999,
                 pseudo_momentum: float = 0.5,
-                threshold: float = 0.95,
+                threshold: float = 0.5,
                 ramp_up: int = 50,
                 distributed: bool = False,
                 local_rank: int = 0,
                 mixed_precision: bool = True,
                 resume: str = None):
-
+        """
+        Initialize settings needed for model training.
+        """
+        
          # Set attributes
         self.ckpt_dir = ckpt_dir                # pylint: disable=attribute-defined-outside-init
         self.epochs = epochs                    # pylint: disable=attribute-defined-outside-init
@@ -256,9 +262,11 @@ class CLAPP(Task):
             query_set: torch.utils.data.Dataset = None,
             save_every: int = 100,
             **kwargs):
-
+        """
+        Train model.
+        """
         if not self.prepared:
-            raise RuntimeError("CLAPP training not prepared.")
+            raise RuntimeError("CLAPP training not prepared. Run the `.prepare() method.")
 
         # Logging
         logger = kwargs.get('logger', None)
@@ -321,7 +329,7 @@ class CLAPP(Task):
                     self.writer.add_scalar('lr', lr, global_step=epoch)
             
             # Save model checkpoint
-            if (epoch % save_every == 0) & (self.local_rank == 0):
+            if (self.local_rank == 0) & (epoch % save_every == 0):
                 ckpt = os.path.join(self.ckpt_dir, f"ckpt.{epoch}.pth.tar")
                 self.save_checkpoint(ckpt, epoch=epoch, history=history)
             

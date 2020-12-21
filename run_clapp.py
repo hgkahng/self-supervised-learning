@@ -87,7 +87,7 @@ def main_worker(local_rank: int, config: object):
         logger = get_rich_logger(logfile)
         if config.enable_wandb:
             configure_wandb(
-                name='clapp:' + config.hash,
+                name='clapp-v2:' + config.hash,
                 project=config.data,
                 config=config
             )
@@ -189,8 +189,6 @@ def main_worker(local_rank: int, config: object):
             pseudo_temperature=config.pseudo_temperature,
             normalize=config.normalize,
             contrast_mode=config.contrast_mode,
-            select_from=config.select_from,
-            select_trials=config.select_trials
         ),
     )
     model.prepare(
