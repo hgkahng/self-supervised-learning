@@ -9,6 +9,7 @@
 --learning_rate 0.03
 --weight_decay 1e-4
 --cosine_warmup 10
+--cosine_min_lr 5e-3
 --save_every 100
 --projector_type mlp
 --projector_dim 128
@@ -20,6 +21,7 @@
 --query_augment rand
 --key_augment moco
 --pseudo_augment moco
+--rand_k 5
 --contrast_mode batch
 --normalize softmax
 --threshold 0.5
