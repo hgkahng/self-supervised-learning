@@ -251,11 +251,15 @@ def get_multi_step_scheduler(optimizer: optim.Optimizer, milestones: list, gamma
     return MultiStepLR(optimizer, milestones=milestones, gamma=gamma)
 
 
-def get_cosine_scheduler(optimizer: optim.Optimizer, epochs: int, warmup_steps: int = 0, cycles: int = 1):
+def get_cosine_scheduler(optimizer: optim.Optimizer,
+                         epochs: int,
+                         warmup_steps: int = 0,
+                         cycles: int = 1,
+                         min_lr: float = 5e-3):
     """Configure half cosine learning rate schduler."""
     if warmup_steps < 0:
         return None
     if cycles <= 1:
-        return WarmupCosineSchedule(optimizer, warmup_steps=warmup_steps, t_total=epochs)
+        return WarmupCosineSchedule(optimizer, warmup_steps=warmup_steps, t_total=epochs, min_lr=min_lr)
     else:
         return WarmupCosineWithHardRestartsSchedule(optimizer, warmup_steps=warmup_steps, t_total=epochs, cycles=cycles)
