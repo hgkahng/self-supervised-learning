@@ -135,6 +135,7 @@ class MoCo(Task):
                 weight_decay: float = 1e-4,
                 cosine_warmup: int = 10,
                 cosine_cycles: int = 1,
+                cosine_min_lr: float = 5e-3,
                 epochs: int = 1000,
                 batch_size: int = 256,
                 num_workers: int = 0,
@@ -176,7 +177,8 @@ class MoCo(Task):
             self.optimizer,
             epochs=self.epochs,
             warmup_steps=cosine_warmup,
-            cycles=cosine_cycles
+            cycles=cosine_cycles,
+            min_lr=cosine_min_lr,
             )
 
         # Resuming from previous checkpoint (optional)

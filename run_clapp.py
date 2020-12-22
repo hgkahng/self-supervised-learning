@@ -107,7 +107,7 @@ def main_worker(local_rank: int, config: object):
         encoder = SplitBatchNorm2d.convert_split_batchnorm(encoder)
 
     # Data
-    trans_kwargs = dict(size=config.input_size, data=config.data, impl=config.augmentation)
+    trans_kwargs = dict(size=config.input_size, data=config.data, impl=config.augmentation, k=config.rand_k)
     query_trans  = AUGMENTS[config.query_augment](**trans_kwargs)
     key_trans    = AUGMENTS[config.key_augment](**trans_kwargs)
     pseudo_trans = AUGMENTS[config.pseudo_augment](**trans_kwargs)
@@ -198,6 +198,7 @@ def main_worker(local_rank: int, config: object):
         weight_decay=config.weight_decay,
         cosine_warmup=config.cosine_warmup,
         cosine_cycles=config.cosine_cycles,
+        cosine_min_lr=config.cosine_min_lr,
         epochs=config.epochs,
         batch_size=config.batch_size,
         num_workers=config.num_workers,

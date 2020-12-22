@@ -138,6 +138,7 @@ class ConfigBase(object):
         parser.add_argument('--weight_decay', type=float, default=1e-3, help='Weight decay factor.')
         parser.add_argument('--cosine_warmup', type=int, default=-1, help='Number of warmups before cosine LR scheduling (-1 to disable.)')
         parser.add_argument('--cosine_cycles', type=int, default=1, help='Number of hard cosine LR cycles with hard restarts.')
+        parser.add_argument('--cosine_min_lr', type=float, default=5e-3, help='LR lower bound when cosine scheduling is used.')
         parser.add_argument('--mixed_precision', action='store_true', help='Use float16 precision.')
         return parser
 
@@ -284,6 +285,7 @@ class MoCoConfig(PretrainConfigBase):
         parser.add_argument('--key_momentum', type=float, default=0.999, help='Momentum for updating key encoder.')
         parser.add_argument('--query_augment', type=str, default='moco', help='Augmentation applied to query (x_q).')
         parser.add_argument('--key_augment', type=str, default='moco', help='Augmentation applied to key (x_k).')
+        parser.add_argument('--rand_k', type=int, default=5, help='Strength of RandAugment, if used.')
         parser.add_argument('--split_bn', action='store_true')
         parser.add_argument('--knn_k', type=int, nargs='+', default=[5, 200], help='')
         return parser
@@ -311,8 +313,7 @@ class CLAPPConfig(PretrainConfigBase):
         parser.add_argument('--query_augment', type=str, default='rand', help='Augmentation applied to query (x_q).')
         parser.add_argument('--key_augment', type=str, default='moco', help='Augmentation applied to key (x_k).')
         parser.add_argument('--pseudo_augment', type=str, default='moco', help='Augmentation applied to pseudo labeler (x_p).')
-        parser.add_argument('--select_from', type=int, default=100, help='Normalizing dimension size.')
-        parser.add_argument('--select_trials', type=int, default=10, help='Number of pseudo selection trials.')
+        parser.add_argument('--rand_k', type=int, default=5, help='Strength of RandAugment, if used.')
         parser.add_argument('--contrast_mode', type=str, default='batch', choices=['queue', 'batch'], help='Queue vs. Batch.')
         parser.add_argument('--normalize', type=str, default='softmax', help='Method for normalizing logits to distribution.')
         parser.add_argument('--threshold', type=float, default=0.5, help='Threshold for pseudo labeling.')
