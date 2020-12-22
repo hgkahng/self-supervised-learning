@@ -14,10 +14,11 @@ class RandAugment(ImageAugment):
                  size: int or tuple = (224, 224),
                  data: str = 'imagenet',
                  impl: str = 'torchvision',
+                 k: int = 5,
                  **kwargs):
         super(RandAugment, self).__init__(size, data, impl)
         
-        self.k = kwargs.get('k', 5)
+        self.k = 5
         self.scale = kwargs.get('scale', (0.2, 1.0))
         
         if self.impl == 'torchvision':
@@ -29,7 +30,7 @@ class RandAugment(ImageAugment):
         """RandAugment based on torchvision."""
         transform = [
             transforms.ToPILImage(),
-            transforms.RandomResizedCrop(self.size, scale=self.scale),  # TODO: necessary?
+            transforms.RandomResizedCrop(self.size, scale=self.scale),
             transforms.RandomHorizontalFlip(0.5),
             RandAugmentTv(k=self.k),
             transforms.ToTensor(),
@@ -40,7 +41,7 @@ class RandAugment(ImageAugment):
     def with_albumentations(self):
         """RandAugment based on albumentations"""
         transform = [
-            A.RandomResizedCrop(*self.size, scale=self.scale),  # TODO: necessary?
+            A.RandomResizedCrop(*self.size, scale=self.scale),
             A.HorizontalFlip(0.5),
             RandAugmentAlb(k=self.k),
             A.Normalize(self.mean, self.std, always_apply=True),

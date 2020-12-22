@@ -68,7 +68,8 @@ class TestAugment(ImageAugment):
     def __init__(self,
                  size: int or tuple = (224, 224),
                  data: str = 'imagenet',
-                 impl: str = 'torchvision'):
+                 impl: str = 'torchvision',
+                 **kwargs):
         super(TestAugment, self).__init__(size, data, impl)
 
         if self.impl == 'torchvision':

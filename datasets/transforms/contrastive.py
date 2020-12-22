@@ -26,7 +26,8 @@ class WeakAugment(ImageAugment):
     def __init__(self,
                  size: int or tuple = (224, 224),
                  data: str = 'imagenet',
-                 impl: str = 'torchvision'):
+                 impl: str = 'torchvision',
+                 **kwargs):
         super(WeakAugment, self).__init__(size, data, impl)
 
         if self.impl == 'torchvision':
@@ -63,7 +64,8 @@ class MoCoAugment(ImageAugment):
     def __init__(self,
                  size: int or tuple = (224, 224),
                  data: str = 'imagenet',
-                 impl: str = 'torchvision'):
+                 impl: str = 'torchvision',
+                 **kwargs):
         super(MoCoAugment, self).__init__(size, data, impl)
         
         self.blur = apply_blur(self.data)
@@ -124,7 +126,8 @@ class SimCLRAugment(ImageAugment):
     def __init__(self,
                  size: int or tuple = (224, 224),
                  data: str = 'imagenet',
-                 impl: str = 'torchvision'):
+                 impl: str = 'torchvision',
+                 **kwargs):
         super(SimCLRAugment, self).__init__(size, data, impl)
         
         self.blur = apply_blur(self.data)
