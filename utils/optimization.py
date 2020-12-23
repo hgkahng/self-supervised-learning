@@ -177,18 +177,29 @@ class WarmupCosineSchedule(LambdaLR):
                  cycles: float = 0.5,
                  min_lr: float = 0.,
                  last_epoch: int = -1):
+        
         self.warmup_steps = warmup_steps
         self.t_total = t_total
         self.cycles = cycles
         self.min_lr = min_lr
+        self.base_lr = optimizer.defaults['lr']
+        
         super(WarmupCosineSchedule, self).__init__(optimizer, self.lr_lambda, last_epoch=last_epoch)
 
     def lr_lambda(self, step: int):
         """A lambda function used as argument for `LambdaLR`."""
         if step < self.warmup_steps:
-            return self.min_lr + float(step) / float(max(1, self.warmup_steps))
-        progress = float(step - self.warmup_steps) / float(max(1, self.t_total - self.warmup_steps))
-        return self.min_lr + max(0., 0.5 * (1. + math.cos(math.pi * float(self.cycles) * 2.0 * progress)))
+            return float(step) / float(max(1, self.warmup_steps))
+        else:
+            progress = float(step - self.warmup_steps) / float(max(1, self.t_total - self.warmup_steps))
+            mul = max(0., 0.5 * (1. + math.cos(math.pi * float(self.cycles) * 2.0 * progress)))
+            if self.expected_lr(mul) < self.min_lr:
+                return self.min_lr / self.base_lr
+            else:
+                return mul
+
+    def expected_lr(self, mul: float):
+        return self.base_lr * mul
 
 
 class WarmupCosineWithHardRestartsSchedule(LambdaLR):
