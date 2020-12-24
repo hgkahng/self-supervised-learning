@@ -10,7 +10,7 @@
 --weight_decay 1e-4
 --cosine_warmup 10
 --cosine_min_lr 5e-3
---save_every 50
+--save_every 100
 --projector_type mlp
 --projector_dim 128
 --num_negatives 4096
