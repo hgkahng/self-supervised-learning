@@ -18,7 +18,7 @@ class RandAugment(ImageAugment):
                  **kwargs):
         super(RandAugment, self).__init__(size, data, impl)
         
-        self.k = 5
+        self.k = k
         self.scale = kwargs.get('scale', (0.2, 1.0))
         
         if self.impl == 'torchvision':
