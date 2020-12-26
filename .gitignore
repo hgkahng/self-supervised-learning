@@ -133,6 +133,7 @@ checkpoints/
 data/
 notebooks/
 wandb/
+tmp/
 
 # IDE
 .vscode
