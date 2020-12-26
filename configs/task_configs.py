@@ -147,7 +147,7 @@ class ConfigBase(object):
         """Returns an `argparse.ArgumentParser` instance containing logging-related arguments."""
         parser = argparse.ArgumentParser("Logging", add_help=False)
         parser.add_argument('--checkpoint_root', type=str, default='./checkpoints/', help='Top-level directory of checkpoints.')
-        parser.add_argument('--save_every', type=int, default=None, help='Save model checkpoint every `save_every` epochs.')
+        parser.add_argument('--save_every', type=int, default=100, help='Save model checkpoint every `save_every` epochs.')
         parser.add_argument('--enable_wandb', action='store_true', help='Use Weights & Biases plugin.')
         return parser
 
@@ -280,7 +280,7 @@ class MoCoConfig(PretrainConfigBase):
         parser = argparse.ArgumentParser('MoCo', add_help=False)
         parser.add_argument('--projector_type', type=str, default='mlp', choices=('linear', 'mlp'))
         parser.add_argument('--projector_dim', type=int, default=128, help='Dimension of projection head.')
-        parser.add_argument('--temperature', type=float, default=0.07, help='Logit scaling factor.')
+        parser.add_argument('--temperature', type=float, default=0.2, help='Logit scaling factor.')
         parser.add_argument('--num_negatives', type=int, default=65536, help='Number of negative examples to maintain.')
         parser.add_argument('--key_momentum', type=float, default=0.999, help='Momentum for updating key encoder.')
         parser.add_argument('--query_augment', type=str, default='moco', help='Augmentation applied to query (x_q).')
@@ -318,7 +318,7 @@ class CLAPPConfig(PretrainConfigBase):
         parser.add_argument('--normalize', type=str, default='softmax', help='Method for normalizing logits to distribution.')
         parser.add_argument('--threshold', type=float, default=0.5, help='Threshold for pseudo labeling.')
         parser.add_argument('--split_bn', action='store_true', help='Use ghost batch normalization.')
-        parser.add_argument('--ramp_up', type=int, default=50)
+        parser.add_argument('--ramp_up', type=int, default=50, help='50 for CIFAR-10, 200 for CIFAR-100/TinyImageNet.')
         parser.add_argument('--knn_k', type=int, nargs='+', default=[5, 200], help='')
         return parser
 
