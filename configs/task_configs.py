@@ -295,6 +295,25 @@ class MoCoConfig(PretrainConfigBase):
         return 'moco'
 
 
+class BYOLConfig(PretrainConfigBase):
+    """Configurations for BYOL."""
+    def __init__(self, args=None, **kwargs):
+        super(BYOLConfig, self).__init__(args, **kwargs)
+
+    @staticmethod
+    def task_specific_parser() -> argparse.ArgumentParser:
+        parser = argparse.ArgumentParser('BYOL', add_help=False)
+        parser.add_argument('--projector_type', type=str, default='byol', choices=('byol', ))
+        parser.add_argument('--projector_dim', type=int, default=256, help='Output dimension of projection / predictor.')
+        parser.add_argument('--projector_hidden_dim', type=int, default=4096, help='Hidden dimension of projector / predictor.')
+        parser.add_argument('--knn_k', type=int, nargs='+', default=[5, 200], help='')
+        return parser
+    
+    @property
+    def task(self) -> str:
+        return 'byol'
+
+
 class CLAPPConfig(PretrainConfigBase):
     """Configurations for CLAPP."""
     def __init__(self, args=None, **kwargs):

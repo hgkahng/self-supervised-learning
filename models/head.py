@@ -35,6 +35,12 @@ class HeadBase(nn.Module):
         self.load_state_dict(ckpt[key])
 
 
+class FCHeadBase(HeadBase):
+    def __init__(self, input_size: int, output_size: int):
+        super(FCHeadBase, self).__init__(output_size)
+        assert isinstance(input_size, int), "Number of input units."
+
+
 class GAPHeadBase(HeadBase):
     def __init__(self, in_channels: int, output_size: int):
         super(GAPHeadBase, self).__init__(output_size)
@@ -47,6 +53,7 @@ class LinearHead(GAPHeadBase):
         Arguments:
             in_channels: int, number of input feature maps.
             num_features: int, number of output features.
+            dropout: float, dropout ratio in the range [0, 1].
         """
         super(LinearHead, self).__init__(in_channels, num_features)
 
@@ -136,3 +143,89 @@ class MLPHead(GAPHeadBase):
     @property
     def num_parameters(self):
         return sum(p.numel() for p in self.layers.parameters() if p.requires_grad)
+
+
+class BYOLProjectionHead(GAPHeadBase):
+    def __init__(self, in_channels: int, hidden_size: int = 4096, output_size: int = 256):
+        """
+        Arguments:
+            in_channels: int, number of input feature maps.
+            output_size: int, number of output features. 
+        """
+        super(BYOLProjectionHead, self).__init__(in_channels, output_size)
+
+        self.in_channels = in_channels
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+        self.layers = self.make_layers(
+            in_channels=self.in_channels,
+            hidden_size=self.hidden_size,
+            output_size=self.output_size,
+        )
+    
+    @staticmethod
+    def make_layers(in_channels: int, hidden_size: int, output_size: int):
+        layers = nn.Sequential(
+            collections.OrderedDict(
+                [
+                    ('gap', nn.AdaptiveAvgPool2d(1)),
+                    ('flatten', Flatten()),
+                    ('linear1', nn.Linear(in_channels, hidden_size, bias=False)),
+                    ('bnorm1', nn.BatchNorm1d(hidden_size)),
+                    ('relu1', nn.ReLU(inplace=True)),
+                    ('linear2', nn.Linear(hidden_size, output_size, bias=True))
+                ]
+            )
+        )
+
+        return layers
+
+    def forward(self, x: torch.Tensor):
+        return self.layers(x)
+
+    @property
+    def num_parameters(self):
+        return sum(p.numel() for p in self.layers.parameters() if p.requires_grad)
+
+
+class BYOLPredictionHead(FCHeadBase):
+    def __init__(self, input_size: int = 256, hidden_size: int = 4096, output_size: int = 256):
+        """
+        Arguments:
+            input_size: int,
+            hidden_size: int,
+            output_size: int,
+        """
+        super(BYOLPredictionHead, self).__init__(input_size, output_size)
+
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.output_size = output_size
+        self.layers = self.make_layers(
+            input_size=self.input_size,
+            hidden_size=self.hidden_size,
+            output_size=self.output_size,
+        )
+    
+    @staticmethod
+    def make_layers(input_size: int, hidden_size: int, output_size: int):
+        layers = nn.Sequential(
+            collections.OrderedDict(
+                [
+                    ('linear1', nn.Linear(input_size, hidden_size, bias=False)),
+                    ('bnorm1', nn.BatchNorm1d(hidden_size)),
+                    ('relu1', nn.ReLU(inplace=True)),
+                    ('linear2', nn.Linear(hidden_size, output_size, bias=True)),
+                ]
+            )
+        )
+
+        return layers
+
+    def forward(self, x: torch.Tensor):
+        return self.layers(x)
+
+    @property
+    def num_parameters(self):
+        return sum(p.numel() for p in self.layers.parameters() if p.requires_grad)
+    

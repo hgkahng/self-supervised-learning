@@ -1,0 +1,17 @@
+--data cifar10
+--input_size 32
+--backbone_type resnet50
+--epochs 1000
+--batch_size 256
+--num_workers 8
+--gpus 3
+--optimizer lars
+--learning_rate 0.2
+--weight_decay 0.0000015
+--cosine_warmup 10
+--save_every 100
+--projector_type byol
+--projector_dim 256
+--knn_k 5 200
+--enable_wandb
+--mixed_precision
