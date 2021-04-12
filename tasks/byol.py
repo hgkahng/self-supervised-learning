@@ -2,6 +2,7 @@
 
 import os
 import copy
+import math
 
 import torch
 import torch.nn as nn
@@ -177,7 +178,7 @@ class BYOL(Task):
                 sampler.set_epoch(epoch)
 
             # Train
-            history = self.train(data_loader)
+            history = self.train(data_loader, current_epoch=epoch - 1)  # for loop starts with `epoch=1`.
             log = " | ".join([f"{k} : {v:.4f}" for k, v in history.items()])
 
             # Evaluate
@@ -214,7 +215,7 @@ class BYOL(Task):
             if self.scheduler is not None:
                 self.scheduler.step()
 
-    def train(self, data_loader: torch.utils.data.DataLoader):
+    def train(self, data_loader: torch.utils.data.DataLoader, current_epoch: int):
         """BYOL training of an epoch."""
         
         steps = len(data_loader)
@@ -228,7 +229,10 @@ class BYOL(Task):
                 task = pg.add_task(f"[bold red] Waiting... ", total=steps)
 
             for i, batch in enumerate(data_loader):
-                loss = self.train_step(batch)
+                gamma = self.gamma_by_step(current_step=current_epoch * steps + i,
+                                           total_steps=self.epochs * steps,
+                                           base=0.996)
+                loss = self.train_step(batch, gamma=gamma)
                 result['loss'][i] = loss.detach()
                 
                 if self.local_rank == 0:
@@ -240,7 +244,7 @@ class BYOL(Task):
         
         return {k: v.mean().item() for k, v in result.items()}
     
-    def train_step(self, batch: dict):
+    def train_step(self, batch: dict, gamma: float = 0.996):
         """A single forward & backward pass."""
         with torch.cuda.amp.autocast(self.mixed_precision):
 
@@ -266,7 +270,8 @@ class BYOL(Task):
             self.backprop(loss)
 
             # Update target network
-            self._ema_update_target_net_params(gamma=self._gamma_by_step())
+            total_steps = self.epochs 
+            self._ema_update_target_net_params(gamma=gamma)
         
         return loss
 
@@ -300,8 +305,11 @@ class BYOL(Task):
         for p_onl, p_tgt in zip(self.online_net.parameters(), self.target_net.parameters()):
             p_tgt.data = p_tgt.data * gamma + p_onl.data * (1. - gamma)
 
-    def _gamma_by_step(step: int):
-        return 0.9996  # FIXME: decay BYOL paper (page 5)
+    @staticmethod
+    def gamma_by_step(current_step: int, total_steps: int, base: float = 0.996):
+        """Gradually increases ema update parameter."""
+        progress = current_step / total_steps
+        return 1 - (1 - base) * math.cos(math.pi * progress) / 2
 
     def save_checkpoint(self, path: str, **kwargs):
         """Save model to a `.tar` checkpoint file."""
