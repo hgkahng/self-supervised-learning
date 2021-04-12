@@ -74,22 +74,19 @@ def main_worker(local_rank: int, config: object):
     config.batch_size = config.batch_size // config.world_size
     config.num_workers = config.num_workers // config.num_gpus_per_node
 
-    # Logging
-
-    
     # Networks
     encoder = ResNetBackbone(name=config.backbone_type,
                              data=config.data,
                              in_channels=3)
     projector = BYOLProjectionHead(
         in_channels=encoder.out_channels,
-        hidden_size=4096,  # TODO: add to argparse
-        output_size=256,   # TODO: add to argparse
+        hidden_size=config.projector_hid_dim,
+        output_size=config.projector_out_dim,
     )
     predictor = BYOLPredictionHead(
-        input_size=256,    # equal to output size of projector
-        hidden_size=4096,  # TODO: add to argparse
-        output_size=256,   # add to argparse
+        input_size=config.projector_out_dim,
+        hidden_size=config.projector_hid_dim,
+        output_size=config.projector_out_dim,
     )
 
     # Data
@@ -104,6 +101,12 @@ def main_worker(local_rank: int, config: object):
                                      transform=ssl_trans)
         finetune_set = CIFAR10('./data/cifar10', train=True, transform=finetune_trans)
         test_set = CIFAR10('./data/cifar10', train=False, transform=test_trans)
+    elif config.data == 'cifar100':
+        train_set = CIFAR100ForSimCLR('./data/cifar100',
+                                      train=True,
+                                      transform=ssl_trans)
+        finetune_set = CIFAR100('./data/cifar100', train=True, transform=finetune_trans)
+        test_set = CIFAR100('./data/cifar100', train=False, transform=test_trans)
     else:
         raise NotImplementedError
     

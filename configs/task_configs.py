@@ -304,8 +304,8 @@ class BYOLConfig(PretrainConfigBase):
     def task_specific_parser() -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser('BYOL', add_help=False)
         parser.add_argument('--projector_type', type=str, default='byol', choices=('byol', ))
-        parser.add_argument('--projector_dim', type=int, default=256, help='Output dimension of projection / predictor.')
-        parser.add_argument('--projector_hidden_dim', type=int, default=4096, help='Hidden dimension of projector / predictor.')
+        parser.add_argument('--projector_out_dim', type=int, default=256, help='Output dimension of projection / predictor.')
+        parser.add_argument('--projector_hid_dim', type=int, default=4096, help='Hidden dimension of projector / predictor.')
         parser.add_argument('--knn_k', type=int, nargs='+', default=[5, 200], help='')
         return parser
     
