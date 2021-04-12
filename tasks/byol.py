@@ -270,7 +270,6 @@ class BYOL(Task):
             self.backprop(loss)
 
             # Update target network
-            total_steps = self.epochs 
             self._ema_update_target_net_params(gamma=gamma)
         
         return loss
