@@ -11,7 +11,8 @@
 --cosine_warmup 10
 --save_every 100
 --projector_type byol
---projector_dim 256
+--projector_out_dim 256
+--projector_hid_dim 4096
 --knn_k 5 200
 --enable_wandb
 --mixed_precision
