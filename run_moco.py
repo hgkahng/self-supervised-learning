@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 
 import os
-from run_clapp import AUGMENTS
 import sys
 import time
 import rich
