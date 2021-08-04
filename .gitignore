@@ -137,3 +137,4 @@ tmp/
 # IDE
 .vscode
 .idea
+.empty
