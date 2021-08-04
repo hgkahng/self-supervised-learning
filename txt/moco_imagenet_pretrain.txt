@@ -1,0 +1,22 @@
+--data imagenet
+--data_root ./data
+--input_size 224
+--backbone_type resnet50
+--epochs 200
+--batch_size 64
+--num_workers 4
+--gpus 0 1
+--optimizer sgd
+--learning_rate 0.03
+--weight_decay 1e-4
+--cosine_warmup 10
+--save_every 100
+--projector_type mlp
+--projector_dim 128
+--temperature 0.2
+--key_momentum 0.999
+--num_negatives 65536
+--query_augment moco
+--key_augment moco
+--knn_k 5 200
+--enable_wandb
