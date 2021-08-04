@@ -4,9 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from pytorch_lightning.metrics.functional import auc
-from pytorch_lightning.metrics.functional import precision
-from pytorch_lightning.metrics.functional import recall
+from torchmetrics.functional import precision, recall
 
 
 class MultiAccuracy(nn.Module):
