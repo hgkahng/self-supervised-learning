@@ -239,7 +239,7 @@ class ImageNet(_ImageNet):
 
 class ImageNetPair(ImageNet):
     def __init__(self,
-                 root: str = '../imagenet2012',
+                 root: str,
                  split: str = 'train',
                  transform: object = None,
                  **kwargs):
@@ -251,13 +251,38 @@ class ImageNetPair(ImageNet):
 
     def __getitem__(self, idx):
         path, target = self.samples[idx]
-        img = self.load_image_cv2(path)
+        img = load_image_cv2(path)
         if self.transform is not None:
             x1 = self.transform(img)
             x2 = self.transform(img)
 
         return dict(x1=x1, x2=x2, y=target, idx=idx)
 
+
+class ImageNetForMoCo(ImageNet):
+    def __init__(self,
+                 root: str,
+                 split: str = 'train',
+                 query_transform: object = None,
+                 key_transform: object = None,
+                 **kwargs):
+        super(ImageNetForMoCo, self).__init__(root=root,
+                                              split=split,
+                                              transform=None,
+                                              target_transform=None,
+                                              **kwargs)
+        
+        self.query_transform = query_transform
+        self.key_transform   = key_transform
+    
+    def __getitem__(self, idx):
+        path, target = self.samples[idx]
+        img = load_image_cv2(path)
+
+        x1 = self.query_transform(img)
+        x2 = self.key_transform(img)
+
+        return dict(x1=x1, x2=x2, y=target, idx=idx)
 
 ImageNetForSimCLR = ImageNetPair
 TinyImageNetForSimCLR = TinyImageNetPair
