@@ -115,49 +115,54 @@ def main_worker(local_rank: int, config: object):
     test_trans = TestAugment(**trans_kwargs)
 
     if config.data == 'cifar10':
-        train_set = CIFAR10ForCLAPP('./data/cifar10',
+        data_dir = os.path.join(config.data_root, 'cifar10')
+        train_set = CIFAR10ForCLAPP(data_dir,
                                     train=True,
                                     query_transform=query_trans,
                                     key_transform=key_trans,
                                     pseudo_transform=pseudo_trans)
-        finetune_set = CIFAR10('./data/cifar10', train=True, transform=finetune_trans)
-        test_set     = CIFAR10('./data/cifar10', train=False, transform=test_trans)
+        finetune_set = CIFAR10(data_dir, train=True, transform=finetune_trans)
+        test_set     = CIFAR10(data_dir, train=False, transform=test_trans)
     elif config.data == 'cifar100':
-        train_set = CIFAR100ForCLAPP('./data/cifar100',
+        data_dir = os.path.join(config.data_root, 'cifar100')
+        train_set = CIFAR100ForCLAPP(data_dir,
                                      train=True,
                                      query_transform=query_trans,
                                      key_transform=key_trans,
                                      pseudo_transform=pseudo_trans)
-        finetune_set = CIFAR100('./data/cifar100', train=True, transform=finetune_trans)
-        test_set     = CIFAR100('./data/cifar100', train=False, transform=test_trans)
+        finetune_set = CIFAR100(data_dir, train=True, transform=finetune_trans)
+        test_set     = CIFAR100(data_dir, train=False, transform=test_trans)
     elif config.data == 'svhn':
-        train_set = SVHNForCLAPP('./data/svhn',
+        data_dir = os.path.join(config.data_root, 'svhn')
+        train_set = SVHNForCLAPP(data_dir,
                                  split='train',
                                  query_transform=query_trans,
                                  key_transform=key_trans,
                                  pseudo_transform=pseudo_trans)
-        finetune_set = SVHN('./data/svhn', split='train', transform=finetune_trans)
-        test_set = SVHN('./data/svhn', split='test', transform=test_trans)
+        finetune_set = SVHN(data_dir, split='train', transform=finetune_trans)
+        test_set     = SVHN(data_dir, split='test', transform=test_trans)
     elif config.data == 'stl10':
-        train_set = STL10ForCLAPP('./data/stl10',
+        data_dir = os.path.join(config.data_root, 'stl10')
+        train_set = STL10ForCLAPP(data_dir,
                                   split='train+unlabeled',
                                   query_transform=query_trans,
                                   key_transform=key_trans,
                                   pseudo_transform=pseudo_trans)
-        finetune_set = STL10('./data/stl10', split='train', transform=finetune_trans)
-        test_set = STL10('./data/stl10', split='test', transform=test_trans)
+        finetune_set = STL10(data_dir, split='train', transform=finetune_trans)
+        test_set = STL10(data_dir, split='test', transform=test_trans)
     elif config.data == 'tinyimagenet':
-        train_set = TinyImageNetForCLAPP('./data/tiny-imagenet-200',
+        data_dir = os.path.join(config.data_root, 'tiny-imagenet-200')
+        train_set = TinyImageNetForCLAPP(data_dir,
                                          split='train',
                                          query_transform=query_trans,
                                          key_transform=key_trans,
                                          pseudo_transform=pseudo_trans,
                                          in_memory=True)
-        finetune_set = TinyImageNet('./data/tiny-imagenet-200',
+        finetune_set = TinyImageNet(data_dir,
                                     split='train',
                                     transform=finetune_trans,
                                     in_memory=True)
-        test_set     = TinyImageNet('./data/tiny-imagenet-200',
+        test_set     = TinyImageNet(data_dir,
                                     split='val',
                                     transform=test_trans,
                                     in_memory=True)

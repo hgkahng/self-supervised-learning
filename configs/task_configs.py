@@ -112,6 +112,7 @@ class ConfigBase(object):
     def data_parser() -> argparse.ArgumentParser:
         """Returns an `argparse.ArgumentParser` instance containing data-related arguments."""
         parser = argparse.ArgumentParser("Data", add_help=False)
+        parser.add_argument('--data_root', type=str, default='./data', help='Root directory holding datasets.')
         parser.add_argument('--data', type=str, choices=('cifar10', 'cifar100', 'svhn', 'stl10', 'tinyimagenet', 'imagenet'), required=True)
         parser.add_argument('--input_size', type=int, choices=(32, 64, 96, 224), required=True)
         parser.add_argument('--augmentation', type=str, default='torchvision',
