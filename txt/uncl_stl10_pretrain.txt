@@ -1,0 +1,25 @@
+--data stl10
+--input_size 96
+--backbone_type resnet50
+--epochs 500
+--batch_size 256
+--num_workers 8
+--gpus 0 1 2 3
+--optimizer sgd
+--learning_rate 0.3
+--weight_decay 1e-4
+--lr_warmup 10
+--save_every 50
+--eval_every 1
+--projector_type mlp
+--projector_dim 128
+--key_momentum 0.999
+--teacher_momentum 0.999
+--temperature 0.2
+--num_negatives 4096
+--ensemble_num_estimators 128
+--ensemble_dropout_rate 0.2
+--uncertainty_threshold 0.5
+--num_false_negatives 512
+--mixed_precision
+--wandb_project uncl(stl10)

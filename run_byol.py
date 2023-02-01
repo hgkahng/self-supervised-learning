@@ -1,39 +1,37 @@
 # -*- coding: utf-8 -*-
 
-from datasets.transforms.supervised import FinetuneAugment
 import os
 import sys
-import time
-import rich
+import typing
+import warnings
 
+import wandb
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.multiprocessing as mp
 import torch.distributed as dist
 
 from rich.console import Console
 
-from datasets.cifar import CIFAR10, CIFAR10ForSimCLR
-from datasets.cifar import CIFAR100, CIFAR100ForSimCLR
-from datasets.transforms import SimCLRAugment, FinetuneAugment, TestAugment
+from datasets.cifar import CIFAR10, CIFAR10Pair
+from datasets.cifar import CIFAR100, CIFAR100Pair
+from datasets.stl10 import STL10, STL10Pair
+from datasets.imagenet import ImageNet, ImageNetPair
+from datasets.transforms import MoCoAugment, FinetuneAugment, TestAugment
 from configs.task_configs import BYOLConfig
-from models.backbone import ResNetBackbone
-from models.head import BYOLProjectionHead, BYOLPredictionHead
-from tasks.byol import BYOL, BYOLLoss
-from utils.logging import get_rich_logger
-from utils.wandb import configure_wandb
+from tasks.byol import BYOL
+from utils.wandb import initialize_wandb
 
 
-AUGMENTS = {
-    'simclr': SimCLRAugment,
-    'byol': SimCLRAugment,
-}
+def fix_random_seed(s: int = 0):
+    np.random.seed(s)
+    torch.manual_seed(s)
 
 
-def main():
+def main(config: BYOLConfig):
     """Main function for single or distributed BYOL training."""
 
-    config = BYOLConfig.parse_arguments()
     os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(gpu) for gpu in config.gpus])
     num_gpus_per_node = len(config.gpus)
     world_size = config.num_nodes * num_gpus_per_node
@@ -46,21 +44,24 @@ def main():
     console.log(config.__dict__)
     config.save()
 
+    fix_random_seed(config.seed)
+
     if config.distributed:
-        rich.print(f"Distributed training on {world_size} GPUs.")
+        console.print(f"Distributed training on {world_size} GPUs.")
         mp.spawn(
             main_worker,
             nprocs=config.num_gpus_per_node,
             args=(config, )
         )
     else:
-        rich.print("Single GPU training.")
+        console.print(f"Single GPU training on GPU {config.gpus[0]}.")
         main_worker(0, config=config)
 
 
 def main_worker(local_rank: int, config: object):
-    """Single process."""
+    """Single process of BYOL training."""
 
+    # Initialize the training process
     torch.cuda.set_device(local_rank)
     if config.distributed:
         dist_rank = config.node_rank * config.num_gpus_per_node + local_rank
@@ -74,114 +75,78 @@ def main_worker(local_rank: int, config: object):
     config.batch_size = config.batch_size // config.world_size
     config.num_workers = config.num_workers // config.num_gpus_per_node
 
-    # Networks
-    encoder = ResNetBackbone(name=config.backbone_type,
-                             data=config.data,
-                             in_channels=3)
-    projector = BYOLProjectionHead(
-        in_channels=encoder.out_channels,
-        hidden_size=config.projector_hid_dim,
-        output_size=config.projector_out_dim,
-    )
-    predictor = BYOLPredictionHead(
-        input_size=config.projector_out_dim,
-        hidden_size=config.projector_hid_dim,
-        output_size=config.projector_out_dim,
-    )
+    data_aug_config = dict(size=config.input_size, data=config.data, impl=config.augmentation)
+    byol_transform = MoCoAugment(**data_aug_config)
+    finetune_transform = FinetuneAugment(**data_aug_config)
+    test_transform = TestAugment(**data_aug_config)
 
-    # Data
-    trans_kwargs = dict(size=config.input_size, data=config.data, impl=config.augmentation)
-    ssl_trans = AUGMENTS['byol'](**trans_kwargs)
-    finetune_trans = FinetuneAugment(**trans_kwargs)
-    test_trans = TestAugment(**trans_kwargs)
-
+    # Instantiate datasets used for training, evaluation, and testing.
+    data_dir = os.path.join(config.data_root, config.data)
     if config.data == 'cifar10':
-        train_set = CIFAR10ForSimCLR('./data/cifar10',
-                                     train=True,
-                                     transform=ssl_trans)
-        finetune_set = CIFAR10('./data/cifar10', train=True, transform=finetune_trans)
-        test_set = CIFAR10('./data/cifar10', train=False, transform=test_trans)
+        train_set = CIFAR10Pair(data_dir,
+                                train=True,
+                                transform=byol_transform)
+        finetune_set = CIFAR10(data_dir, train=True, transform=finetune_transform)
+        test_set     = CIFAR10(data_dir, train=False, transform=test_transform)
     elif config.data == 'cifar100':
-        train_set = CIFAR100ForSimCLR('./data/cifar100',
-                                      train=True,
-                                      transform=ssl_trans)
-        finetune_set = CIFAR100('./data/cifar100', train=True, transform=finetune_trans)
-        test_set = CIFAR100('./data/cifar100', train=False, transform=test_trans)
+        train_set = CIFAR100Pair(data_dir,
+                                 train=True,
+                                 transform=byol_transform)
+        finetune_set = CIFAR100(data_dir, train=True, transform=finetune_transform)
+        test_set     = CIFAR100(data_dir, train=False, transform=test_transform)
+    elif config.data == 'stl10':
+        train_set = STL10Pair(data_dir,
+                              split='train+unlabeled',
+                              transform=byol_transform)
+        finetune_set = STL10(data_dir, split='train', transform=finetune_transform)
+        test_set     = STL10(data_dir, split='test', transform=test_transform)
+    elif config.data == 'imagenet':
+        train_set    = ImageNetPair(data_dir,
+                                    split='train',
+                                    transform=byol_transform)
+        finetune_set, test_set = ImageNet.split_into_two_subsets(
+            data_dir, split='val', transforms=[finetune_transform, test_transform]
+        )
     else:
-        raise NotImplementedError
-    
-    # Logging
+        raise NotImplementedError(
+            f"Invalid data argument: {config.data}. "
+            f"Supports only one of the following: 'cifar10', 'cifar100', 'stl10', 'imagenet'."
+        )
+
+    # A wandb instance: https://wandb.ai
     if local_rank == 0:
-        logfile = os.path.join(config.checkpoint_dir, 'main.log')
-        logger = get_rich_logger(logfile)
-        if config.enable_wandb:
-            configure_wandb(
-                name='byol:' + config.hash,
-                project=config.data,
-                config=config
-            )
-
-        logger.info(f'Data: {config.data}')
-        logger.info(f'Observations: {len(train_set):,}')
-        logger.info(f'Backbone ({config.backbone_type}): {encoder.num_parameters:,}')
-        logger.info(f'Projector ({config.projector_type}): {projector.num_parameters:,}')
-        logger.info(f'Checkpoint directory: {config.checkpoint_dir}')
+        initialize_wandb(config)
     
-    else:
-        logger = None
+    # Instantiate BYOL trainer
+    trainer = BYOL(config=config, local_rank=local_rank)
 
-    # Model
-    model = BYOL(encoder=encoder,
-                 projector=projector,
-                 predictor=predictor,
-                 loss_function=BYOLLoss()
-    )
-    model.prepare(
-        ckpt_dir=config.checkpoint_dir,
-        optimizer=config.optimizer,
-        learning_rate=config.learning_rate,
-        weight_decay=config.weight_decay,
-        cosine_warmup=config.cosine_warmup,
-        cosine_cycles=config.cosine_cycles,
-        cosine_min_lr=config.cosine_min_lr,
-        epochs=config.epochs,
-        batch_size=config.batch_size,
-        num_workers=config.num_workers,
-        distributed=config.distributed,
-        local_rank=local_rank,
-        mixed_precision=config.mixed_precision,
-        resume=config.resume
-    )
-
-    # Train & evaluate
-    start = time.time()
-    model.run(
+    # Start training
+    elapsed_sec = trainer.run(
         dataset=train_set,
-        memory_set=finetune_set,
-        query_set=test_set,
+        finetune_set=finetune_set,
+        test_set=test_set,
         save_every=config.save_every,
-        logger=logger,
-        knn_k=config.knn_k,
+        eval_every=config.eval_every,
     )
-    elapsed_sec = time.time() - start
-    
-    if logger is not None:
+    if trainer.logger is not None:
         elapsed_mins = elapsed_sec / 60
         elapsed_hours = elapsed_mins / 60
-        logger.info(
-            f'Total training time: {elapsed_mins:,.2f} minutes ({elapsed_hours:,.2f} hours).'
-        )
-        logger.handlers.clear()
+        trainer.logger.info(f'Total training time: {elapsed_mins:,.2f} minutes ({elapsed_hours:,.2f} hours).')
+        trainer.logger.handlers.clear()
+        
+    wandb.finish()
 
 
 if __name__ == '__main__':
 
-    np.random.seed(0)
-    torch.manual_seed(0)
+    warnings.filterwarnings('ignore')
     torch.backends.cudnn.deterministic = False
     torch.backends.cudnn.benchmark = True
+    config = BYOLConfig.parse_arguments()
 
     try:
-        main()
+        main(config)
     except KeyboardInterrupt:
-        sys.exit()
+        wandb.finish()
+        os.system("kill $(ps aux | grep multiprocessing.spawn | grep -v grep | awk '{print $2}') ")
+        sys.exit(0)

@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 
+import torch.nn as nn
+import torchvision.transforms as T
 import albumentations as A
-from torchvision import transforms
 
 from datasets.transforms.base import ImageAugment
-from datasets.transforms.torchvision import RandAugmentTv
+from datasets.transforms.pil_based import RandAugmentTv
 from datasets.transforms.albumentations import NumpyToTensor
 from datasets.transforms.albumentations import RandAugmentAlb
 
@@ -26,17 +27,20 @@ class RandAugment(ImageAugment):
         elif self.impl == 'albumentations':
             self.transform = self.with_albumentations()
 
+    def with_torchvision_tensor_ops(self):
+        raise NotImplementedError
+
     def with_torchvision(self):
         """RandAugment based on torchvision."""
         transform = [
-            transforms.ToPILImage(),
-            transforms.RandomResizedCrop(self.size, scale=self.scale),
-            transforms.RandomHorizontalFlip(0.5),
+            T.ToPILImage(),
+            T.RandomResizedCrop(self.size, scale=self.scale),
+            T.RandomHorizontalFlip(0.5),
             RandAugmentTv(k=self.k),
-            transforms.ToTensor(),
-            transforms.Normalize(self.mean, self.std)
+            T.ToTensor(),
+            T.Normalize(self.mean, self.std)
         ]
-        return transforms.Compose(transform)
+        return T.Compose(transform)
 
     def with_albumentations(self):
         """RandAugment based on albumentations"""

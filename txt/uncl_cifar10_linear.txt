@@ -1,17 +1,16 @@
 --data cifar10
 --input_size 32
---augmentation torchvision
 --backbone_type resnet50
 --epochs 100
 --batch_size 256
 --num_workers 4
---gpus 0
+--gpus 1
 --optimizer sgd
 --learning_rate 30.0
 --weight_decay 0
---cosine_warmup 0
---pretrained_file /path/to/ckpt
---pretrained_task clapp
+--lr_warmup 0
+--pretrained_file checkpoints/cifar10/uncl/resnet50/2022-01-02_00:50:32/ckpt.500.pth.tar
+--pretrained_task uncl
 --labels 1.00
---freeze
---save_every 100
+--save_every 50
+--mixed_precision

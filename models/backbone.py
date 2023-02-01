@@ -28,8 +28,8 @@ class BackboneBase(nn.Module):
     def save_weights_to_checkpoint(self, path: str):
         torch.save(self.state_dict(), path)
 
-    def load_weights_from_checkpoint(self, path: str, key: str):
-        ckpt = torch.load(path, map_location='cpu')
+    def load_weights_from_checkpoint(self, path: str, key: str, device: str = 'cpu'):
+        ckpt = torch.load(path, map_location=device)
         self.load_state_dict(ckpt[key])
 
     @property
@@ -38,14 +38,15 @@ class BackboneBase(nn.Module):
 
 
 class ResNetBackbone(BackboneBase):
+    """Uses ResNet models from `torchvision.models'."""
     def __init__(self, name: str = 'resnet50', data: str = 'imagenet', in_channels: int = 3):
         super(ResNetBackbone, self).__init__(in_channels)
 
         self.name = name  # resnet18, resnet50, resnet101
-        self.data = data  # cifar10, cifar100, svhn, stl10, tinyimagenet, imagenet
+        self.data = data  # cifar10, cifar100, stl10, imagenet
 
-        self.layers = RESNET_FUNCTIONS[self.name](pretrained=False)
-        self.layers = self._remove_gap_and_fc(self.layers)
+        self.layers = RESNET_FUNCTIONS[self.name](pretrained=False)  # fetch ResNet from torchvision.models
+        self.layers = self._remove_gap_and_fc(self.layers)           # keep CNN backbone only
         if self.in_channels != 3:
             self.layers = self._fix_first_conv_in_channels(self.layers, in_channels=self.in_channels)
         if not self.data.startswith('imagenet'):
@@ -53,10 +54,16 @@ class ResNetBackbone(BackboneBase):
         if self.data.startswith('cifar') or self.data.startswith('svhn'):
             self.layers = self._remove_maxpool(self.layers)
 
+        self._convert_relu_inplace_false()
         initialize_weights(self)
 
     def forward(self, x: torch.FloatTensor) -> torch.FloatTensor:
         return self.layers(x)
+
+    def _convert_relu_inplace_false(self):
+        for _, m in self.layers.named_modules():
+            if isinstance(m, nn.ReLU):
+                m.__init__(inplace=False)
 
     @staticmethod
     def _fix_first_conv_in_channels(resnet: nn.Module, in_channels: int) -> nn.Module:
@@ -75,9 +82,8 @@ class ResNetBackbone(BackboneBase):
 
     @staticmethod
     def _remove_gap_and_fc(resnet: nn.Module) -> nn.Module:
-        """
-        Remove global average pooling & fully-connected layer
-        For torchvision ResNet models only."""
+        """Remove global average pooling & fully-connected layer.
+        Works only with ResNet models from `torchvision.models`."""
         model = nn.Sequential()
         for name, child in resnet.named_children():
             if name not in ['avgpool', 'fc']:
@@ -87,7 +93,8 @@ class ResNetBackbone(BackboneBase):
 
     @staticmethod
     def _fix_first_conv_kernel_size(resnet: nn.Module) -> nn.Module:
-        """Fix first conv layer of ResNet. (7x7 -> 3x3)"""
+        """Fix first conv layer of ResNet. (7x7 -> 3x3).
+        Works only with ResNet models from `torchvision.models`."""
         model = nn.Sequential()
         for name, child in resnet.named_children():
             if name == 'conv1':
@@ -99,8 +106,9 @@ class ResNetBackbone(BackboneBase):
         return model
 
     @staticmethod
-    def _remove_maxpool(resnet: nn.Module):
-        """Remove first max pooling layer of ResNet."""
+    def _remove_maxpool(resnet: nn.Module) -> nn.Module:
+        """Remove first max pooling layer of ResNet.
+        Works only with ResNet models from `torchvision.models`."""
         model = nn.Sequential()
         for name, child in resnet.named_children():
             if name == 'maxpool':

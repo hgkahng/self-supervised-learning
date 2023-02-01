@@ -1,89 +1,93 @@
 # -*- coding: utf-8 -*-
 
+import copy
+import typing
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 from utils.logging import get_rich_pbar
 
-
 class KNNEvaluator(object):
+    """Evaluates representations based on the nearest neighbors algorithm."""
     def __init__(self,
-                 num_neighbors: int or list,
+                 num_neighbors: typing.Union[int, list, tuple],
                  num_classes: int,
                  temperature: float = 0.1):
-        
         if isinstance(num_neighbors, int):
             self.num_neighbors = [num_neighbors]
-        elif isinstance(num_neighbors, list):
-            self.num_neighbors = num_neighbors
+        elif isinstance(num_neighbors, (list, tuple)):
+            self.num_neighbors = list(num_neighbors)
         else:
-            raise NotImplementedError
-        self.num_classes = num_classes
-        self.temperature = temperature
+            raise ValueError
+        self.num_classes:   int = num_classes
+        self.temperature: float = temperature
 
     @torch.no_grad()
     def evaluate(self,
                  net: nn.Module,
                  memory_loader: torch.utils.data.DataLoader,
-                 query_loader: torch.utils.data.DataLoader):
+                 test_loader: torch.utils.data.DataLoader) -> typing.Dict[str, float]:
         """
-        Evaluate model.
         Arguments:
             net: a `nn.Module` instance.
-            memory_loader: a `DataLoader` instance of train data. Apply
-                    minimal augmentation as if used for training for linear evaluation.
-                    (i.e., HorizontalFlip(0.5), etc.)
-            query_loader: a `DataLoader` instance of test data. Apply
-                    minimal data augmentation as used for testing for linear evaluation.
-                    (i.e., Resize + Crop (0.875 x size), etc.)
+            memory_loader: a `DataLoader` instance of training data. Apply minimal
+                augmentation as if used for training for linear evaluation.
+                (i.e., HorizontalFlip(0.5), etc.)
+            test_loader: a `DataLoader` instance of test data. Apply minimal
+                data augmentation as used for testing for linear evaluation.
+                (i.e., Resize + Crop (0.875 x size), etc.)
         """
 
-        net.eval()
-        device = next(net.parameters()).device
+        with get_rich_pbar(transient=True, auto_refresh=True) as pbar:
 
-        with get_rich_pbar(transient=True, auto_refresh=True) as pg:
+            # Evaluation mode (mind the batch norm)
+            net.eval()
 
-            desc_1 = "[bold yellow] Extracting features..."
-            task_1 = pg.add_task(desc_1, total=len(memory_loader))
-            desc_2 = f"[bold cyan] {self.num_neighbors}-NN score: "
-            task_2 = pg.add_task(desc_2, total=len(query_loader))
+            device = next(net.parameters()).device
 
-            # 1. Extract memory features (train data to compare against)
-            memory_bank, memory_labels = [], []
-            for _, batch in enumerate(memory_loader):
-                z = net(batch['x'].to(device, non_blocking=True))
-                memory_bank += [F.normalize(z, dim=1)]
+            # Separate progress bars for {feature extraction, lazy prediction}
+            job_fe = pbar.add_task(":fire: KNN feature extraction", total=len(memory_loader))
+            job_lp = pbar.add_task(":rocket: KNN prediction", total=len(test_loader))
+
+            # Feature extraction
+            memory_features, memory_labels = list(), list()
+            for i, batch in enumerate(memory_loader):
+                x = batch['x'].to(device, non_blocking=True)
+                z = F.adaptive_avg_pool2d(net(x), output_size=1).squeeze()
+                memory_features += [F.normalize(z, dim=1)]
                 memory_labels += [batch['y'].to(device)]
-                pg.update(task_1, advance=1.)
-
-            memory_bank = torch.cat(memory_bank, dim=0).T
+                pbar.update(job_fe, advance=1.)
+            memory_features = torch.cat(memory_features, dim=0).t().contiguous()
             memory_labels = torch.cat(memory_labels, dim=0)
 
-            # 2. Extract query features (test data to evaluate) and
-            #  and evalute against memory features.
+            # Lazy prediction
             scores = dict()
             corrects = [0] * len(self.num_neighbors)
-            for _, batch in enumerate(query_loader):
-                z = F.normalize(net(batch['x'].to(device)), dim=1)
+            for _, batch in enumerate(test_loader):
+                x = batch['x'].to(device, non_blocking=True)
+                z = F.normalize(F.adaptive_avg_pool2d(net(x), output_size=1).squeeze(), dim=1)
                 y = batch['y'].to(device)
                 for i, k in enumerate(self.num_neighbors):
                     y_pred = self.predict(k,
-                                            query=z,
-                                            memory_bank=memory_bank,
-                                            memory_labels=memory_labels)[:, 0].squeeze()
+                                          query=z,
+                                          memory_features=memory_features,
+                                          memory_labels=memory_labels)[:, 0].squeeze()
                     corrects[i] += y.eq(y_pred).sum().item()
-                pg.update(task_2, advance=1.) 
-            
-            for i, k in enumerate(self.num_neighbors):
-                scores[k] = corrects[i] / len(query_loader.dataset)
+                pbar.update(job_lp, advance=1.)
 
-            return scores  # dict
+            torch.cuda.empty_cache();
+            for i, k in enumerate(self.num_neighbors):
+                scores[k] = corrects[i] / len(test_loader.dataset)
+
+            return scores
 
     @torch.no_grad()
     def predict(self,
                 k: int,
                 query: torch.FloatTensor,
-                memory_bank: torch.FloatTensor,
+                memory_features: torch.FloatTensor,
                 memory_labels: torch.LongTensor):
 
         C = self.num_classes
@@ -91,15 +95,13 @@ class KNNEvaluator(object):
         B, _ = query.size()
 
         # Compute cosine similarity
-        sim_matrix = torch.einsum('bf,fm->bm', [query, memory_bank])       # (b, f) @ (f, M) -> (b, M)
+        sim_matrix = torch.einsum('bf,fm->bm', [query, memory_features])   # (b, f) @ (f, M) -> (b, M)
         sim_weight, sim_indices = sim_matrix.sort(dim=1, descending=True)  # (b, M), (b, M)
         sim_weight, sim_indices = sim_weight[:, :k], sim_indices[:, :k]    # (b, k), (b, k)
         sim_weight = (sim_weight / T).exp()                                # (b, k)
-        sim_labels = torch.gather(
-            memory_labels.expand(B, -1),                                   # (1, M) -> (b, M)
-            dim=1,
-            index=sim_indices
-        )                                                                  # (b, M)
+        sim_labels = torch.gather(memory_labels.expand(B, -1),             # (1, M) -> (b, M)
+                                  dim=1,
+                                  index=sim_indices)                       # (b, M)
 
         one_hot = torch.zeros(B * k, C, device=sim_labels.device)          # (bk, C)
         one_hot.scatter_(dim=-1, index=sim_labels.view(-1, 1), value=1)    # (bk, C) <- scatter <- (bk, 1)

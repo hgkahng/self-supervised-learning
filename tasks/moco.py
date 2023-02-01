@@ -2,80 +2,204 @@
 
 import os
 import copy
+import math
+import typing
 
+import wandb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from torch.utils.data import DataLoader
-from torch.utils.data import DistributedSampler
+from torch.utils.data import DataLoader, DistributedSampler
 from torch.nn.parallel import DistributedDataParallel
-from torch.utils.tensorboard import SummaryWriter
+from torch.cuda.amp.grad_scaler import GradScaler
 
 from tasks.base import Task
-from utils.distributed import ForMoCo
-from utils.distributed import concat_all_gather
+from layers.batchnorm import SplitBatchNorm2d
+from models.backbone import ResNetBackbone
+from models.head import MLPHead
+
+from utils.distributed import ForMoCo, concat_all_gather
 from utils.metrics import TopKAccuracy
 from utils.knn import KNNEvaluator
-from utils.optimization import get_optimizer
-from utils.optimization import get_cosine_scheduler
-from utils.logging import get_rich_pbar
+from utils.optimization import WarmupCosineDecayLR
+from utils.optimization import configure_optimizer
+from utils.logging import configure_logger
+from utils.progress import configure_progress_bar
+from utils.decorators import timer, suppress_logging_info
 
 
 class MoCoLoss(nn.Module):
-    def __init__(self,temperature: float = 0.2):
+    def __init__(self, temperature: float = 0.2):
         super(MoCoLoss, self).__init__()
         self.temperature = temperature
 
     def forward(self,
-                queries: torch.FloatTensor,
-                keys: torch.FloatTensor,
-                queue: torch.FloatTensor):
+                query: torch.FloatTensor,
+                key: torch.FloatTensor,
+                negatives: torch.FloatTensor,
+                ) -> typing.Tuple[torch.FloatTensor]:
 
-        # Calculate logits
-        pos_logits = torch.einsum('nc,nc->n', [queries, keys]).view(-1, 1)
-        neg_logits = torch.einsum('nc,ck->nk', [queries, queue.clone().detach()])
-        logits = torch.cat([pos_logits, neg_logits], dim=1)  # (B, 1+K)
+        # Compute temperature-scaled similarities
+        pos_logits = torch.einsum('nc,nc->n', [query, key]).view(-1, 1)              # (B, 1  )
+        neg_logits = torch.einsum('nc,ck->nk', [query, negatives.clone().detach()])  # (B,   K)
+        logits = torch.cat([pos_logits, neg_logits], dim=1)                          # (B, 1+K)
         logits.div_(self.temperature)
 
-        # Create labels
-        labels = torch.zeros(logits.size(0), dtype=torch.long, device=logits.device)
+        # Compute instance discrimination loss
+        targets = torch.zeros(logits.size(0), dtype=torch.long, device=logits.device)
+        loss = nn.functional.cross_entropy(logits, targets, reduction='mean')
 
-        # Compute loss
-        loss = nn.functional.cross_entropy(logits, labels)
+        return loss, logits
 
-        return loss, logits, labels
+
+
+class SupMoCoAttractLoss(nn.Module):
+    def __init__(self, temperature: float = 0.2, n: int = 1, loss_weight: float = 1.0):
+        super(SupMoCoAttractLoss, self).__init__()
+        self.temperature: float = temperature
+        self.n: int = n
+        self.loss_weight = loss_weight
+    
+    def forward(self, query: torch.FloatTensor, key: torch.FloatTensor, negatives: torch.FloatTensor,
+                query_labels: torch.LongTensor, negative_labels: torch.LongTensor) -> typing.Tuple[torch.Tensor]:
+        """..."""
+        
+        # 1. Temperature-scaled similarities
+        logits_pos = torch.einsum('nc,nc->n', *[query, key]).view(-1, 1)
+        logits_neg = torch.einsum('nc,ck->nk', *[query, negatives.clone().detach()])
+        logits = torch.cat([logits_pos, logits_neg], dim=1).div(self.temperature)
+        
+        # 2. Instance discrimination loss
+        loss_inst = F.cross_entropy(
+            input=logits,
+            target=torch.zeros(logits.size(0), dtype=torch.long, device=logits.device),
+            reduction='mean'
+        )
+        
+        # 3. Attraction loss
+        label_match = query_labels.view(-1, 1).eq(negative_labels.view(1, -1))
+        if isinstance(self.n, int) and (self.n >= 1):
+            sup_pos_idx = torch.multinomial(label_match.float(), num_samples=self.n)
+            sup_pos_mask = torch.zeros_like(label_match).scatter(dim=1, index=sup_pos_idx, value=1.).bool()
+        else:
+            sup_pos_mask = label_match
+        loss_attr = -1 * F.log_softmax(logits[:, 1:], dim=1).masked_select(sup_pos_mask).mean()
+
+        return loss_inst + self.loss_weight * loss_attr, logits, sup_pos_mask
+
+
+class SupMoCoEliminateLoss(nn.Module):
+    def __init__(self, temperature: float = 0.2):
+        super(SupMoCoEliminateLoss, self).__init__()
+        self.temperature = temperature
+
+    def forward(self, query: torch.FloatTensor, key: torch.FloatTensor, negatives: torch.FloatTensor,
+                query_labels: torch.LongTensor, negative_labels: torch.LongTensor) -> typing.Tuple[torch.Tensor]:
+        """..."""
+
+        # 1. Temperature-scaled similarities
+        logits_pos = torch.einsum('nc,nc->n', *[query, key]).view(-1, 1)
+        logits_pos.div_(self.temperature)
+        logits_neg = torch.einsum('nc,ck->nk', *[query, negatives.clone().detach()])
+        logits_neg.div_(self.temperature)
+        logits = torch.cat([logits_pos, logits_neg], dim=1)
+
+        # 2. Identify false negatives w/ true target labels
+        label_match = query_labels.view(-1, 1).eq(negative_labels.view(1, -1))
+
+        # 3. Instance discrimination loss w/ false negatives eliminated
+        loss = - (
+            logits_pos - torch.log(
+                torch.cat([logits_pos.exp(),
+                           logits_neg.exp().masked_fill(mask=label_match, value=0.)],
+                           dim=1).sum(dim=1, keepdim=True)
+            )
+        )
+        loss = loss.mean()  # (1, ) <- (B, 1)
+
+        return loss, logits, label_match
+
+
+class SupMoCoLoss(MoCoLoss):
+    def __init__(self, temperature: float = 0.2, n: int = 1, ignore_index: int = -1):
+        super(SupMoCoLoss, self).__init__(temperature)
+        self.n = n
+        self.ignore_index = ignore_index
+
+    def forward(self,
+                query: torch.FloatTensor,
+                key: torch.FloatTensor,
+                negatives: torch.FloatTensor,
+                query_labels: torch.LongTensor,
+                negative_labels: torch.LongTensor) -> typing.Tuple[torch.FloatTensor,
+                                                                   torch.FloatTensor,
+                                                                   torch.FloatTensor,
+                                                                   torch.BoolTensor]:
+        """MoCo loss + Supervised positive selection loss (experimental)."""
+
+        loss_moco, logits = super().forward(query, key, negatives)
+        match = query_labels.view(-1, 1).eq(negative_labels.view(1, -1))                     # (B, K); 1 if class matches, 0 otherwise
+        num_match_per_row = match.sum(dim=1, keepdim=True)                                   # (B, 1); number of perfect matches for each anchor
+        if num_match_per_row.lt(self.n).any():
+            raise ValueError(f"Insufficient matches per row (<{self.n}).")                   # TODO: a workaround
+
+        pos_idx = torch.multinomial(match.float(), num_samples=self.n)                       # (B, n); randomly sample positives
+        pos_mask = torch.zeros_like(match).scatter(dim=1, index=pos_idx, value=1.).bool()    # (B, K); mask version of `select_index`
+        loss_sup = -1. * F.log_softmax(logits[:, 1:], dim=1).masked_select(pos_mask).mean()  # (1,  ); average negative log-likelihood
+
+        return loss_moco, logits, loss_sup, pos_mask
+
+    def attract(self, query, key, negatives, query_labels, negative_labels) -> typing.Tuple[torch.Tensor]:
+        """..."""
+        loss_moco, logits = super().forward(query, key, negatives)
+        match = query_labels.view(-1, 1).eq(negative_labels.view(1, -1))                           # (B, K) <- (B, 1) x (1, K)
+        sup_pos_idx = torch.multinomial(match.float(), num_samples=self.n)                         # (B, n)
+        sup_pos_mask = torch.zeros_like(match).scatter(dim=1, index=sup_pos_idx, value=1.).bool()  # (B, K)
+        loss_sup = -1.0 * F.log_softmax(logits[:, 1:], dim=1).masked_select(sup_pos_mask).mean()   # (1,  )
+
+        return loss_moco, logits, loss_sup, sup_pos_mask
 
 
 class MemoryQueue(nn.Module):
-    def __init__(self, size: tuple, device: int = 0):
+    def __init__(self, size: tuple):
         super(MemoryQueue, self).__init__()
 
         if len(size) != 2:
-            raise ValueError(f"Invalid size for memory: {size}. Only supports 2D.")
+            raise ValueError(f"Invalid size for memory queue: {size}. Only supports 2D.")
         self.size = size
-        self.device = device
 
-        with torch.no_grad():
-            self.buffer = torch.randn(*self.size, device=self.device)  # (f, K)
-            self.buffer = F.normalize(self.buffer, dim=0)              # l2 normalize
-            self.ptr = torch.zeros(1, dtype=torch.long, device=self.device)
-            self.labels = torch.zeros(self.size[1], dtype=torch.long, device=self.device)  # (K, )
-
-        self.num_updates = 0
-        self.is_reliable = False
+        self.register_buffer('buffer', F.normalize(torch.randn(*self.size), dim=0))
+        self.register_buffer('ptr', torch.zeros(1, dtype=torch.long))
+        self.register_buffer('num_updates', torch.zeros(1, dtype=torch.long))
+        self.register_buffer('indices', torch.zeros(self.size[1], dtype=torch.long))
+        self.register_buffer('labels', torch.zeros(self.size[1], dtype=torch.long))
+        self.register_buffer('is_reliable', torch.zeros(1, dtype=torch.bool))
 
     @property
     def num_negatives(self):
-        return self.buffer.size(1)
+        return self.size[1]
+
+    @property
+    def features(self):
+        return self.buffer
 
     @torch.no_grad()
-    def update(self, keys: torch.FloatTensor, labels: torch.LongTensor = None):
+    def update(self,
+               keys: torch.FloatTensor,
+               indices: torch.LongTensor = None,
+               labels: torch.LongTensor = None) -> None:
         """
         Update memory queue shared along processes.
         Arguments:
             keys: torch.FloatTensor of shape (B, f)
+            indices: torch.LongTensor of shape (B, )
+            labels: torch.LongTensor of shape (B, )
         """
+
+        if indices is not None:
+            assert len(keys) == len(indices), print(keys.shape, indices.shape)
+
         if labels is not None:
             assert len(keys) == len(labels), print(keys.shape, labels.shape)
 
@@ -85,285 +209,311 @@ class MemoryQueue(nn.Module):
         if self.num_negatives % incoming != 0:
             raise ValueError("Use exponentials of 2 for number of negatives.")
 
-        # Update queue (keys, and optionally labels if provided)
-        ptr = int(self.ptr)
-        self.buffer[:, ptr: ptr + incoming] = keys.T
+        # Update queue of keys
+        ptr = int(self.ptr[0])
+        self.buffer[:, ptr: ptr + incoming] = keys.T  # (f, B)
+
+        # Update queue of labels
         if labels is not None:
-            labels = concat_all_gather(labels)  # (B, ) -> (world_size * B, )
+            labels = concat_all_gather(labels)    # (B, ) -> (world_size * B, )
             self.labels[ptr: ptr + incoming] = labels
+
+        # Update queue of indices
+        if indices is not None:
+            indices = concat_all_gather(indices)  # (B, ) -> (world_size * B, )
+            self.indices[ptr: ptr + incoming] = indices
 
         # Check if the current queue is reliable
         if not self.is_reliable:
-            self.is_reliable = (ptr + incoming) >= self.num_negatives
+            self.is_reliable[0] = (ptr + incoming) >= self.num_negatives
 
         # Update pointer
         ptr = (ptr + incoming) % self.num_negatives
         self.ptr[0] = ptr
-        self.num_updates += 1
+        self.num_updates[0] += 1
 
 
 class MoCo(Task):
-    def __init__(self,
-                 encoder: nn.Module,
-                 head: nn.Module,
-                 queue: MemoryQueue,
-                 loss_function: nn.Module,
-                 ):
+    """MoCo trainer."""
+    def __init__(self, config: object, local_rank: int):
         super(MoCo, self).__init__()
 
-        # Initialize networks
-        self.queue = queue
+        self.config:  object = config
+        self.local_rank: int = local_rank
+
+        self._init_logger()
+        self._init_modules()
+        self._init_cuda()
+        self._init_optimization()
+        self._init_criterion()
+        self._resume_training_from_checkpoint()
+
+    def _init_logger(self) -> None:
+        """
+        For distributed training, logging is only performed on a single process
+        to avoid uninformative duplicates.
+        """
+        if self.local_rank == 0:
+            logfile = os.path.join(self.config.checkpoint_dir, 'main.log')
+            self.logger = configure_logger(logfile=logfile)
+            self.logger.info(f'Checkpoint directory: {self.config.checkpoint_dir}')
+        else:
+            self.logger = None
+
+    def _init_modules(self) -> None:
+        """
+        Initializes the following modules:
+            1) query network (self.net_q)
+            2) key network (self.net_k)
+            3) memory queue (self.queue)
+        """
+        encoder = ResNetBackbone(name=self.config.backbone_type, data=self.config.data, in_channels=3)
+        head    = MLPHead(encoder.out_channels, self.config.projector_dim)
+        if not self.config.distributed:
+            # Ghost Norm; https://arxiv.org/abs/1705.0874
+            encoder = SplitBatchNorm2d.convert_split_batchnorm(encoder)
+
         self.net_q = nn.Sequential()
         self.net_q.add_module('encoder', encoder)
         self.net_q.add_module('head', head)
         self.net_k = copy.deepcopy(self.net_q)
-        self._freeze_key_net_params()
+        self.freeze_params(self.net_k)
+        self.queue = MemoryQueue(size=(self.net_k.head.num_features, self.config.num_negatives))
 
-        self.loss_function = loss_function
+        if self.logger is not None:
+            self.logger.info(f"Encoder ({self.config.backbone_type}): {encoder.num_parameters:,}")
+            self.logger.info(f"Head ({self.config.projector_type}): {head.num_parameters:,}")
 
-        self.scaler = None
-        self.optimizer = None
-        self.scheduler = None
-        self.writer = None
-
-        self.prepared = False
-
-    def prepare(self,
-                ckpt_dir: str,
-                optimizer: str,
-                learning_rate: float = 0.01,
-                weight_decay: float = 1e-4,
-                cosine_warmup: int = 10,
-                cosine_cycles: int = 1,
-                cosine_min_lr: float = 5e-3,
-                epochs: int = 1000,
-                batch_size: int = 256,
-                num_workers: int = 0,
-                key_momentum: float = 0.999,
-                distributed: bool = False,
-                local_rank: int = 0,
-                mixed_precision: bool = True,
-                resume: str = None):
-        """Prepare MoCo pre-training."""
-
-        # Set attributes
-        self.ckpt_dir = ckpt_dir                # pylint: disable=attribute-defined-outside-init
-        self.epochs = epochs                    # pylint: disable=attribute-defined-outside-init
-        self.batch_size = batch_size            # pylint: disable=attribute-defined-outside-init
-        self.num_workers = num_workers          # pylint: disable=attribute-defined-outside-init
-        self.key_momentum = key_momentum        # pylint: disable=attribute-defined-outside-init
-        self.distributed = distributed          # pylint: disable=attribute-defined-outside-init
-        self.local_rank = local_rank            # pylint: disable=attribute-defined-outside-init
-        self.mixed_precision = mixed_precision  # pylint: disable=attribute-defined-outside-init
-        self.resume = resume                    # pylint: disable=attribute-defined-outside-init
-
+    def _init_cuda(self) -> None:
         """
-        Initialize optimizer & LR scheduler.
-            1. If training from scratch, optimizer states will be automatically
-                created on the device of its parameters. No worries.
-            2. If training from a model checkpoint, however, optimizer states must be
-                configured manually using the current `local_rank`. A common approach is:
-                    a) Load all model checkpoints on 'cpu'; `torch.load(ckpt, map_location='cpu')`.
-                    b) Manually move all optimizer states to the appropriate device.
-        """  # pylint: disable=pointless-string-statement
-        self.optimizer = get_optimizer(
-            params=self.net_q.parameters(),
-            name=optimizer,
-            lr=learning_rate,
-            weight_decay=weight_decay
-        )
-        # Learning rate scheduling; if cosine_warmup < 0: scheduler = None.
-        self.scheduler = get_cosine_scheduler(
-            self.optimizer,
-            epochs=self.epochs,
-            warmup_steps=cosine_warmup,
-            cycles=cosine_cycles,
-            min_lr=cosine_min_lr,
-            )
-
-        # Resuming from previous checkpoint (optional)
-        if resume is not None:
-            if not os.path.exists(resume):
-                raise FileNotFoundError
-            self.load_model_from_checkpoint(resume)
-
-        # Distributed training (optional, disabled by default.)
-        if distributed:
+        1) Assigns cuda devices to modules.
+        2) Wraps query network with `DistributedDataParallel`.
+        """
+        if self.config.distributed:
             self.net_q = DistributedDataParallel(
-                module=self.net_q.to(local_rank),
-                device_ids=[local_rank]
-            )
+                module=self.net_q.to(self.local_rank),
+                device_ids=[self.local_rank],
+                bucket_cap_mb=100)
         else:
-            self.net_q.to(local_rank)
-            
-        # No DDP wrapping for key encoder, as it does not have gradients
-        self.net_k.to(local_rank)
-        
-        # Mixed precision training (optional, enabled by default.)
-        self.scaler = torch.cuda.amp.GradScaler() if mixed_precision else None
+            self.net_q.to(self.local_rank)
+        self.net_k.to(self.local_rank)
+        self.queue.to(self.local_rank)
 
-        # TensorBoard
-        self.writer = SummaryWriter(ckpt_dir) if local_rank == 0 else None
+    def _init_criterion(self) -> None:
+        self.criterion = MoCoLoss(self.config.temperature)
 
-        # Ready to train!
-        self.prepared = True
+    def _init_optimization(self) -> None:
+        """
+        1) optimizer: {SGD, LARS}
+        2) learning rate scheduler: linear warmup + cosine decay
+        3) float16 training (optional)
+        """
+        self.optimizer = configure_optimizer(params=self.net_q.parameters(),
+                                             name=self.config.optimizer,
+                                             lr=self.config.learning_rate,
+                                             weight_decay=self.config.weight_decay)
+        self.scheduler = WarmupCosineDecayLR(optimizer=self.optimizer,
+                                             total_epochs=self.config.epochs,
+                                             warmup_epochs=self.config.lr_warmup,
+                                             warmup_start_lr=1e-4,
+                                             min_decay_lr=1e-4)
+        self.amp_scaler = GradScaler() if self.config.mixed_precision else None
 
-    def run(self,
-            dataset: torch.utils.data.Dataset,
-            memory_set: torch.utils.data.Dataset = None,
-            query_set: torch.utils.data.Dataset = None,
-            save_every: int = 100,
-            **kwargs):
-
-        if not self.prepared:
-            raise RuntimeError("Training not prepared.")
-
-        # DataLoader (for self-supervised pre-training)
-        sampler = DistributedSampler(dataset) if self.distributed else None
-        shuffle = not self.distributed
-        data_loader = DataLoader(
-            dataset,
-            batch_size=self.batch_size,
-            sampler=sampler,
-            shuffle=shuffle,
-            num_workers=self.num_workers,
-            drop_last=True,
-            pin_memory=True
-        )
-
-        # DataLoader (for supervised evaluation)
-        if (memory_set is not None) and (query_set is not None):
-            memory_loader = DataLoader(memory_set, batch_size=self.batch_size*2, num_workers=self.num_workers)
-            query_loader = DataLoader(query_set, batch_size=self.batch_size*2)
-            knn_eval = True
+    def _resume_training_from_checkpoint(self) -> None:
+        """
+        Resume training from a previous checkpoint if
+        a valid path is provided to the `resume` argument.
+        """
+        if self.config.resume is not None:
+            if os.path.exists(self.config.resume):
+                self.start_epoch = self.load_model_from_checkpoint(
+                    self.config.resume, self.local_rank
+                )
+                if self.logger is not None:
+                    self.logger.info("Successfully loaded model from checkpoint. "
+                                     f"Resuming from epoch = {self.start_epoch}")
+            else:
+                if self.logger is not None:
+                    self.logger.warn("Invalid checkpoint. Starting from epoch = 1")
+                self.start_epoch = 1
         else:
-            query_loader = None
+            if self.logger is not None:
+                self.logger.info(f"No checkpoint provided. Starting from epoch = 1")
+            self.start_epoch = 1
+
+    @timer
+    def run(self, train_set: torch.utils.data.Dataset,
+                  memory_set: torch.utils.data.Dataset,
+                  test_set: torch.utils.data.Dataset,
+                  **kwargs):
+        """Training and evaluation."""
+
+        if self.logger is not None:
+            self.logger.info(f"Data: {train_set.__class__.__name__}")
+            self.logger.info(f"Number of training examples: {len(train_set):,}")
+
+        if self.config.distributed:
+            # For distributed training, we must provide an explicit sampler to
+            # avoid duplicates across devices. Each node (i.e., GPU) will be
+            # trained on `len(train_set) // world_size' samples.
+            sampler = DistributedSampler(train_set, shuffle=True)
+        else:
+            sampler = None
+        shuffle: bool = sampler is None
+        data_loader = DataLoader(train_set,
+                                 batch_size=self.config.batch_size,
+                                 sampler=sampler,
+                                 shuffle=shuffle,
+                                 num_workers=self.config.num_workers,
+                                 drop_last=True,
+                                 pin_memory=True,
+                                 persistent_workers=self.config.num_workers > 0)
+
+        if self.local_rank == 0:
+            # Intermediate evaluation of representations based on nearest neighbors.
+            # The frequency is controlled by the `eval_every' argument of this function.
+            eval_loader_config = dict(batch_size=self.config.batch_size * self.config.world_size,
+                                      num_workers=self.config.num_workers * self.config.world_size,
+                                      pin_memory=True,
+                                      persistent_workers=True)
+            memory_loader = DataLoader(memory_set, **eval_loader_config)
+            test_loader   = DataLoader(test_set, **eval_loader_config)
+            knn_evaluator = KNNEvaluator(num_neighbors=[5, 200], num_classes=train_set.num_classes)
+        else:
             memory_loader = None
-            knn_eval = False
+            test_loader   = None
+            knn_evaluator = None
 
-        # Logging
-        logger = kwargs.get('logger', None)
+        for epoch in range(1, self.config.epochs + 1):
 
-        for epoch in range(1, self.epochs + 1):
+            if epoch < self.start_epoch:
+                if self.logger is not None:
+                    self.logger.info(f"Skipping epoch {epoch} (< {self.start_epoch})")
+                continue
 
-            if self.distributed and (sampler is not None):
+            # The `epoch` attribute of the `sampler` is accessed when iterated.
+            # Refer to the `__iter__` function of `DistributedSampler` for further information.
+            if isinstance(sampler, DistributedSampler):
                 sampler.set_epoch(epoch)
 
-            # Train
-            history = self.train(data_loader)
-            log = " | ".join([f"{k} : {v:.4f}" for k, v in history.items()])
+            # A single epoch of training
+            train_history = self.train(data_loader, epoch=epoch)
 
-            # Evaluate
-            if (self.local_rank == 0) and knn_eval:
-                knn_k = kwargs.get('knn_k', [5, 200])
-                knn = KNNEvaluator(knn_k, num_classes=query_loader.dataset.num_classes)
-                knn_scores = knn.evaluate(self.net_q,
-                                          memory_loader=memory_loader,
-                                          query_loader=query_loader)
-                for k, score in knn_scores.items():
-                    log += f" | knn@{k}: {score*100:.2f}%"
+            # Evaluate the learned representations every `eval_every` epochs, on rank 0.
+            if (knn_evaluator is not None) & (epoch % self.config.eval_every == 0):
+                with torch.cuda.amp.autocast():
+                    knn_scores: dict = knn_evaluator.evaluate(
+                        net=self.net_q.module.encoder if self.config.distributed else self.net_q.encoder,
+                        memory_loader=memory_loader,
+                        test_loader=test_loader
+                    )
             else:
                 knn_scores = None
 
-            # Logging
-            if logger is not None:
-                logger.info(f"Epoch [{epoch:>4}/{self.epochs:>4}] - " + log)
+            # Logging; https://wandb.ai
+            log = dict()
+            log.update(train_history)
+            if isinstance(knn_scores, dict):
+                log.update({f'eval/knn@{k}': v for k, v in knn_scores.items()})
+            if self.scheduler is not None:
+                log.update({'misc/lr': self.scheduler.get_last_lr()[0]})
+            if self.local_rank == 0:
+                wandb.log(data=log, step=epoch)
 
-            # TensorBoard
-            if self.writer is not None:
-                for k, v in history.items():
-                    self.writer.add_scalar(k, v, global_step=epoch)
-                if knn_scores is not None:
-                    for k, score in knn_scores.items():
-                        self.writer.add_scalar(f'knn@{k}', score, global_step=epoch)
-                if self.scheduler is not None:
-                    lr = self.scheduler.get_last_lr()[0]
-                    self.writer.add_scalar('lr', lr, global_step=epoch)
+            def maxlen_fmt(total: int) -> str:
+                return f">0{int(math.log10(total))+1}d"
 
-            if (epoch % save_every == 0) & (self.local_rank == 0):
-                ckpt = os.path.join(self.ckpt_dir, f"ckpt.{epoch}.pth.tar")
-                self.save_checkpoint(ckpt, epoch=epoch, history=history)
+            def history_to_log_message(history: dict, step: int, total: int, fmt: str = ">04d"):
+                msg: str = " | ".join([f"{k} : {v:.4f}" for k, v in history.items()])
+                return f"Epoch [{step:{fmt}}/{total:{fmt}}] - " + msg
 
+            # Logging; terminal
+            if self.logger is not None:
+                fmt = maxlen_fmt(self.config.epochs)
+                msg = history_to_log_message(log, epoch, self.config.epochs, fmt)
+                self.logger.info(msg)
+
+            # Save intermediate model checkpoints
+            if (self.local_rank == 0) & (epoch % self.config.save_every == 0):
+                fmt = maxlen_fmt(self.config.epochs)
+                ckpt = os.path.join(self.config.checkpoint_dir, f"ckpt.{epoch:{fmt}}.pth.tar")
+                self.save_checkpoint(ckpt, epoch=epoch, history=log)
+
+            # Update learning rate
             if self.scheduler is not None:
                 self.scheduler.step()
 
-    def train(self, data_loader: torch.utils.data.DataLoader):
-        """MoCo training."""
+    @suppress_logging_info
+    def train(self, data_loader: DataLoader, **kwargs) -> typing.Dict[str, float]:
+        """Iterates over the `data_loader` once for MoCo training."""
 
-        steps = len(data_loader)
+        steps: int = len(data_loader)
         self._set_learning_phase(train=True)
-        result = {
-            'loss': torch.zeros(steps, device=self.local_rank),
-            'rank@1': torch.zeros(steps, device=self.local_rank),
+        metrics = {
+            'train/loss': torch.zeros(steps, device=self.local_rank),
+            'train/rank@1': torch.zeros(steps, device=self.local_rank),
         }
 
-        with get_rich_pbar(transient=True, auto_refresh=False) as pg:
-            if self.local_rank == 0:
-                task = pg.add_task(f"[bold red] Waiting... ", total=steps)
-
+        with configure_progress_bar(transient=True,
+                                    auto_refresh=False,
+                                    disable=self.local_rank != 0) as pbar:
+            job = pbar.add_task(f":thread:", total=steps)
             for i, batch in enumerate(data_loader):
+                # Single batch iteration
+                loss, rank = self.train_step(batch)
+                metrics['train/loss'][i]   = loss.detach()
+                metrics['train/rank@1'][i] = rank.detach()
+                # Update progress bar
+                msg = f':thread: [{i+1}/{steps}]: ' + \
+                    ' | '.join([f"{k} : {self.nanmean(v[:i+1]).item():.4f}" for k, v in metrics.items()])
+                pbar.update(job, advance=1., description=msg)
+                pbar.refresh()
 
-                loss, logits, labels = self.train_step(batch)
-                result['loss'][i] = loss.detach()
-                result['rank@1'][i] = TopKAccuracy(k=1)(logits, labels)
+        return {k: self.nanmean(v).item() for k, v in metrics.items()}
 
-                if self.local_rank == 0:
-                    desc = f"[bold green] [{i+1}/{steps}]: "
-                    for k, v in result.items():
-                        desc += f" {k} : {v[:i+1].mean():.4f} |"
-                    pg.update(task, advance=1., description=desc)
-                    pg.refresh()
+    def train_step(self, batch: dict) -> typing.Tuple[torch.FloatTensor]:
+        """A single forward & backward pass using a batch of examples."""
 
-        return {k: v.mean().item() for k, v in result.items()}
-
-    def train_step(self, batch: dict):
-        """A single forward & backward pass."""
-
-        with torch.cuda.amp.autocast(self.mixed_precision):
-
-            # Get data (two views)
-            x_q = batch['x1'].to(self.local_rank)
-            x_k = batch['x2'].to(self.local_rank)
-
+        with torch.cuda.amp.autocast(self.amp_scaler is not None):
+            # Fetch two positive views; {query, key}
+            x_q = batch['x1'].to(self.local_rank, non_blocking=True)
+            x_k = batch['x2'].to(self.local_rank, non_blocking=True)
             # Compute query features; (B, f)
             z_q = F.normalize(self.net_q(x_q), dim=1)
-
             with torch.no_grad():
-
-                # Update momentum encoder
+                # An exponential moving average update of the key network
                 self._momentum_update_key_net()
-
-                # Shuffle across nodes (gpus)
+                # Shuffle across devices (GPUs)
                 x_k, idx_unshuffle = ForMoCo.batch_shuffle_ddp(x_k)
-
                 # Compute key features; (B, f)
                 z_k = F.normalize(self.net_k(x_k), dim=1)
-
-                # Restore original keys (which were distributed across nodes)
+                # Restore key features to their original devices
                 z_k = ForMoCo.batch_unshuffle_ddp(z_k, idx_unshuffle)
-
-            # Compute loss
-            loss, logits, labels = self.loss_function(z_q, z_k, self.queue.buffer)
-
+            # Compute loss & metrics
+            loss, logits = self.criterion(z_q, z_k, self.queue.buffer)
+            y = batch['y'].to(self.local_rank).detach()
+            rank = TopKAccuracy(k=1)(logits.detach(), torch.zeros_like(y))
             # Backpropagate & update
             self.backprop(loss)
-
             # Update memory queue
-            self.queue.update(keys=z_k)
+            self.queue.update(keys=z_k,
+                              indices=batch['idx'].to(self.local_rank),
+                              labels=y)
 
-        return loss, logits, labels
+        return loss, rank
 
-    def backprop(self, loss: torch.FloatTensor):
-        if self.scaler is not None:
-            self.scaler.scale(loss).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+    def backprop(self, loss: torch.FloatTensor) -> None:
+        """SGD parameter update, optionally with float16 training."""
+        if self.amp_scaler is not None:
+            self.amp_scaler.scale(loss).backward()
+            self.amp_scaler.step(self.optimizer)
+            self.amp_scaler.update()
         else:
             loss.backward()
             self.optimizer.step()
         self.optimizer.zero_grad()
 
-    def _set_learning_phase(self, train: bool = False):
+    def _set_learning_phase(self, train: bool = False) -> None:
         if train:
             self.net_q.train()
             self.net_k.train()
@@ -372,20 +522,13 @@ class MoCo(Task):
             self.net_k.eval()
 
     @torch.no_grad()
-    def _freeze_key_net_params(self):
-        """Disable gradient calculation of key network."""
-        for p in self.net_k.parameters():
-            p.requires_grad = False
-
-    @torch.no_grad()
-    def _momentum_update_key_net(self):
+    def _momentum_update_key_net(self) -> None:
         for p_q, p_k in zip(self.net_q.parameters(), self.net_k.parameters()):
-            p_k.data = p_k.data * self.key_momentum + p_q.data * (1. - self.key_momentum)
+            p_k.data = p_k.data * self.config.key_momentum + p_q.data * (1. - self.config.key_momentum)
 
-    def save_checkpoint(self, path: str, **kwargs):
+    def save_checkpoint(self, path: str, epoch: int, **kwargs) -> None:
         """Save model to a `.tar' checkpoint file."""
-
-        if self.distributed:
+        if isinstance(self.net_q, DistributedDataParallel):
             encoder = self.net_q.module.encoder
             head = self.net_q.module.head
         else:
@@ -399,22 +542,274 @@ class MoCo(Task):
             'queue': self.queue.state_dict(),
             'optimizer': self.optimizer.state_dict(),
             'scheduler': self.scheduler.state_dict(),
+            'epoch': epoch,
         }
         if kwargs:
             ckpt.update(kwargs)
         torch.save(ckpt, path)
 
-    def load_model_from_checkpoint(self, path: str):
+    def load_model_from_checkpoint(self, path: str, local_rank: int = 0) -> int:
         """
-        Loading model from a checkpoint.
-        If resuming training, ensure that all modules have been properly initialized.
+        Loading model from a checkpoint. Be sure to have
+        all modules properly initialized prior to executing this function.
+        Returns the epoch of the checkpoint + 1 (used as `self.start_epoch`).
         """
-        ckpt = torch.load(path, map_location='cpu')
-        self.net_q.encoder.load_state_dict(ckpt['encoder'])
-        self.net_q.head.load_state_dict(ckpt['head'])
+        device = torch.device(f'cuda:{local_rank}')
+        ckpt = torch.load(path, map_location=device)
+
+        # Load query network
+        if isinstance(self.net_q, DistributedDataParallel):
+            self.net_q.module.encoder.load_state_dict(ckpt['encoder'])
+            self.net_q.module.head.load_state_dict(ckpt['head'])
+        else:
+            self.net_q.encoder.load_state_dict(ckpt['encoder'])
+            self.net_q.head.load_state_dict(ckpt['head'])
+
+        # Load key network
         self.net_k.load_state_dict(ckpt['net_k'])
+
+        # Load memory queue
         self.queue.load_state_dict(ckpt['queue'])
+
+        # Load optimizer states
         self.optimizer.load_state_dict(ckpt['optimizer'])
+        self.move_optimizer_states(self.optimizer, device)
+
+        # Load scheduler states
         if 'scheduler' in ckpt:
             self.scheduler.load_state_dict(ckpt['scheduler'])
-        self.move_optimizer_states(self.optimizer, self.local_rank)
+
+        return ckpt['epoch'] + 1
+
+    @staticmethod
+    def nanmean(x: torch.FloatTensor):
+        """Compute mean excluding NaNs."""
+        nan_mask = torch.isnan(x)
+        denominator = (~nan_mask).sum()
+        if denominator.eq(0):
+            return torch.full((1, ), fill_value=float('nan'), device=x.device)
+        else:
+            numerator = x[~nan_mask].sum()
+            return torch.true_divide(numerator, denominator)
+
+    @staticmethod
+    def masked_mean(x: torch.FloatTensor, m: torch.BoolTensor):
+        """Compute mean for where the values of `m` = 1."""
+        if m.bool().sum() == len(m):
+            return torch.full((1, ), fill_value=float('inf'), device=x.device)
+        return x[m.bool()].mean()
+
+
+class SupMoCoBase(MoCo):
+    def __init__(self, config: object, local_rank: int):
+        super(SupMoCoBase, self).__init__(config=config, local_rank=local_rank)
+
+    def _init_criterion(self) -> None:
+        raise NotImplementedError
+
+    @suppress_logging_info
+    def train(self, data_loader: DataLoader, **kwargs) -> typing.Dict[str, float]:
+        """Iterates over the `data_loader` once for SupMoCo training."""
+        
+        steps = len(data_loader)
+        self._set_learning_phase(train=True)
+        metrics = {
+            'loss': torch.zeros(steps, device=self.local_rank),
+            'rank@1': torch.zeros(steps, device=self.local_rank),
+            'precision': torch.zeros(steps, device=self.local_rank),
+        }
+
+        with configure_progress_bar(transient=True, auto_refresh=False,
+                                    disable=self.local_rank != 0) as pbar:
+            job = pbar.add_task(f":thread:", total=steps)
+            for i, batch in enumerate(data_loader):
+                # Single batch update
+                loss, rank, precision = self.train_step(batch)
+                metrics['loss'][i] = loss.detach()
+                metrics['rank@1'][i] = rank.detach()
+                metrics['precision'][i] = precision.detach()
+                # Update progress bar
+                msg = f":thread:[{i+1}/{steps}]: " + \
+                    " | ".join([f"{k} : {self.nanmean(v[:i+1]).item():.4f}" for k, v in metrics.items()])
+                pbar.update(job, advance=1., description=msg)
+                pbar.refresh()
+
+        return {k: self.nanmean(v).item() for k, v in metrics.items()}
+
+    def train_step(self, batch: dict) -> typing.Tuple[torch.Tensor]:
+        """..."""
+        
+        with torch.cuda.amp.autocast(enabled=self.amp_scaler is not None):
+        
+            # Fetch two positive views; {query, key}
+            x_q = batch['x1'].to(self.local_rank, non_blocking=True)
+            x_k = batch['x2'].to(self.local_rank, non_blocking=True)
+        
+            # Compute query features; (B, f)
+            z_q = F.normalize(self.net_q(x_q), dim=1)
+        
+            with torch.no_grad():
+                self._momentum_update_key_net()
+                # Compute key features; (B, f)
+                x_k, idx_unshuffle = ForMoCo.batch_shuffle_ddp(x_k)
+                z_k = F.normalize(self.net_k(x_k), dim=1)
+                z_k = ForMoCo.batch_unshuffle_ddp(z_k, idx_unshuffle)
+
+            # Compute loss & metrics
+            y = batch['y'].to(self.local_rank).detach()
+            if self.queue.is_reliable:
+                loss, logits, label_pos_mask = self.criterion(query=z_q,
+                                                              key=z_k,
+                                                              negatives=self.queue.features,
+                                                              query_labels=y,
+                                                              negative_labels=self.queue.labels)
+            else:
+                loss, logits = MoCoLoss(self.criterion.temperature)(query=z_q, key=z_k,
+                                                                    negatives=self.queue.features)
+                label_pos_mask = torch.zeros_like(logits[:, 1:], dtype=torch.bool)
+            rank = TopKAccuracy(k=1)(logits.detach(), torch.zeros_like(y))
+            precision = self.teacher_precision(labels_batch=y, 
+                                               labels_queue=self.queue.labels,
+                                               mask_teacher=label_pos_mask)
+            
+            # Backpropagate & update
+            self.backprop(loss)
+
+            # Update memory queue
+            self.queue.update(keys=z_k, indices=batch['idx'].to(self.local_rank), labels=y)
+
+        return loss, rank, precision
+
+            
+    @staticmethod
+    def teacher_precision(labels_batch: torch.LongTensor,
+                          labels_queue: torch.LongTensor,
+                          mask_teacher: torch.BoolTensor) -> torch.FloatTensor:
+        """Compute precision of teacher's predictions."""
+        with torch.no_grad():
+            labels_batch = labels_batch.view(-1, 1)           # (B,  ) -> (B, 1)
+            labels_queue = labels_queue.view(1, -1)           # (K,  ) -> (1, K)
+            is_true_positive = labels_batch.eq(labels_queue)  # (B, 1) @ (1, K) -> (B, K)
+            num_true_positive = is_true_positive.masked_select(mask_teacher).sum()
+            return torch.true_divide(num_true_positive, mask_teacher.sum())
+
+
+class SupMoCoAttract(SupMoCoBase):
+    def __init__(self, config: object, local_rank: int):
+        super(SupMoCoAttract, self).__init__(config=config, local_rank=local_rank)
+
+    def _init_criterion(self) -> None:
+        self.criterion = SupMoCoAttractLoss(
+            temperature=self.config.temperature,
+            n=self.config.num_positives,
+            loss_weight=self.config.loss_weight,
+        )
+
+
+class SupMoCoEliminate(SupMoCoBase):
+    def __init__(self, config: object, local_rank: int):
+        super(SupMoCoEliminate, self).__init__(config=config, local_rank=local_rank)
+    
+    def _init_criterion(self) -> None:
+        self.criterion = SupMoCoEliminateLoss(temperature=self.config.temperature)
+
+
+class SupMoCo(MoCo):  # TODO: remove as deprecated
+    def __init__(self, config: object, local_rank: int):
+        self.loss_weight: float = config.loss_weight    # TODO
+        self.num_positives: int = config.num_positives  # FIXME
+        super(SupMoCo, self).__init__(config, local_rank)
+
+    def _init_criterion(self):
+        self.criterion = SupMoCoLoss(temperature=self.config.temperature,
+                                     n=self.num_positives)
+
+    @suppress_logging_info
+    def train(self, data_loader: DataLoader) -> typing.Dict[str, float]:
+        """Iterates over the `data_loader` once for SupMoCo training."""
+
+        steps = len(data_loader)
+        self._set_learning_phase(train=True)
+        metrics = {
+            'loss':      torch.zeros(steps, device=self.local_rank),
+            'loss_sup':  torch.zeros(steps, device=self.local_rank),
+            'rank@1':    torch.zeros(steps, device=self.local_rank),
+            'precision': torch.zeros(steps, device=self.local_rank),
+        }
+
+        with configure_progress_bar(transient=True,
+                                    auto_refresh=False,
+                                    disable=self.local_rank != 0) as pbar:
+            job = pbar.add_task(f":thread:", total=steps)
+
+            for i, batch in enumerate(data_loader):
+                # Single batch iteration
+                loss, loss_sup, rank, precision = self.train_step(batch)
+                metrics['loss'][i]      = loss.detach()
+                metrics['loss_sup'][i]  = loss_sup.detach()
+                metrics['rank@1'][i]    = rank.detach()
+                metrics['precision'][i] = precision.detach()
+
+                # Update progress bar
+                msg = f':thread:[{i+1}/{steps}]: ' + \
+                    ' | '.join([f"{k} : {self.nanmean(v[:i+1]).item():.4f}" for k, v in metrics.items()])
+                pbar.update(job, advance=1., description=msg)
+                pbar.refresh()
+
+        return {k: self.nanmean(v).item() for k, v in metrics.items()}
+
+    def train_step(self, batch: dict) -> typing.Tuple[torch.FloatTensor,
+                                                      torch.FloatTensor,
+                                                      torch.LongTensor,
+                                                      torch.FloatTensor]:
+        """A single forward & backward pass using a batch of examples."""
+        with torch.cuda.amp.autocast(self.amp_scaler is not None):
+            # Fetch two positive view; {query, key}
+            x_q = batch['x1'].to(self.local_rank, non_blocking=True)
+            x_k = batch['x2'].to(self.local_rank, non_blocking=True)
+            # Compute query features; (B, f)
+            z_q = F.normalize(self.net_q(x_q), dim=1)
+            with torch.no_grad():
+                self._momentum_update_key_net()
+                x_k, idx_unshuffle = ForMoCo.batch_shuffle_ddp(x_k)
+                z_k = F.normalize(self.net_k(x_k), dim=1)
+                z_k = ForMoCo.batch_unshuffle_ddp(z_k, idx_unshuffle)
+            # Compute loss & metrics
+            y = batch['y'].to(self.local_rank).detach()
+            if self.queue.is_reliable:
+                loss, logits, loss_sup, mask_sup = self.criterion(query=z_q,
+                                                                  key=z_k,
+                                                                  negatives=self.queue.features,
+                                                                  query_labels=y,
+                                                                  negative_labels=self.queue.labels)
+            else:
+                loss, logits = MoCoLoss(self.criterion.temperature)(query=z_q,
+                                                                    key=z_k,
+                                                                    negatives=self.queue.features)
+                loss_sup = torch.zeros(1, device=loss.device)
+                mask_sup = torch.zeros_like(logits[:, 1:], dtype=torch.bool)
+            rank = TopKAccuracy(k=1)(logits.detach(), torch.zeros_like(y))
+            precision = self.teacher_precision(labels_batch=y,
+                                               labels_queue=self.queue.labels,
+                                               mask_teacher=mask_sup)
+            # Backpropagate & update
+            self.backprop(loss + self.loss_weight * loss_sup)
+            # Update memory queue
+            self.queue.update(keys=z_k,
+                              indices=batch['idx'].to(self.local_rank),
+                              labels=y)
+
+        return loss, loss_sup, rank, precision
+
+    @staticmethod
+    def teacher_precision(labels_batch: torch.LongTensor,
+                          labels_queue: torch.LongTensor,
+                          mask_teacher: torch.BoolTensor) -> torch.FloatTensor:
+        """Compute precision of teacher's predictions."""
+        with torch.no_grad():
+            labels_batch = labels_batch.view(-1, 1)           # (B,  ) -> (B, 1)
+            labels_queue = labels_queue.view(1, -1)           # (K,  ) -> (1, K)
+            is_true_positive = labels_batch.eq(labels_queue)  # (B, 1) @ (1, K) -> (B, K)
+            num_true_positive = is_true_positive.masked_select(mask_teacher).sum()
+            return torch.true_divide(num_true_positive, mask_teacher.sum())
+

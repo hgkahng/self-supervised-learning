@@ -1,23 +1,22 @@
 --data cifar100
 --input_size 32
 --backbone_type resnet50
---epochs 1000
+--epochs 500
 --batch_size 256
---num_workers 8
+--num_workers 4
 --gpus 0
 --optimizer sgd
---learning_rate 0.03
+--learning_rate 0.3
 --weight_decay 1e-4
---cosine_warmup 10
+--lr_warmup 10
 --save_every 50
+--eval_every 1
 --projector_type mlp
 --projector_dim 128
+--num_negatives 4096
 --temperature 0.2
 --key_momentum 0.999
---num_negatives 4096
---query_augment moco
---key_augment moco
---knn_k 5 200
---split_bn
---enable_wandb
 --mixed_precision
+--wandb_project UNCL(CIFAR100)
+--wandb_group moco
+--wandb_job_type baseline

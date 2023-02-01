@@ -1,0 +1,33 @@
+--data cifar100
+--input_size 32
+--backbone_type resnet50
+--epochs 1000
+--batch_size 256
+--num_workers 4
+--gpus 0 1 2 3
+--optimizer sgd
+--learning_rate 0.3
+--weight_decay 1e-4
+--cosine_warmup 10
+--save_every 100
+--eval_every 1
+--projector_type mlp
+--projector_dim 128
+--num_negatives 4096
+--temperature 0.2
+--key_momentum 0.999
+--teacher_momentum 0.999
+--query_augment moco
+--key_augment moco
+--teacher_augment moco
+--mixed_precision
+--ensemble_num_estimators 128
+--ensemble_dropout_rate 0.2
+--easy_pos_ub 0.5
+--hard_pos_lb 0.5
+--easy_pos_start_epoch 50
+--hard_pos_start_epoch 1000
+--num_positives 1
+--loss_weight_easy 1.0
+--loss_weight_hard 1.0
+--wandb_job_type pretrain

@@ -31,7 +31,7 @@ class Task(object):
         raise NotImplementedError
 
     @staticmethod
-    def move_optimizer_states(optimizer: torch.optim.Optimizer, device: int = 0):
+    def move_optimizer_states(optimizer: torch.optim.Optimizer, device: str):
         for state in optimizer.state.values():  # dict; state of parameters
             for k, v in state.items():          # iterate over paramteters (k=name, v=tensor)
                 if torch.is_tensor(v):          # If a tensor,
@@ -39,5 +39,6 @@ class Task(object):
 
     @staticmethod
     def freeze_params(net: nn.Module):
-        for p in net.parameters():
-            p.requires_grad = False
+        with torch.no_grad():
+            for p in net.parameters():
+                p.requires_grad = False

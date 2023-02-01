@@ -6,12 +6,21 @@
 
 import numpy as np
 import albumentations as A
+import torch
+import torch.nn as nn
 from torchvision import transforms
 
 
-class ImageAugment(object):
+class ImageAugment(nn.Module):
     
-    SUPPORTED_DATASETS = ['cifar10', 'cifar100', 'svhn', 'stl10', 'tinyimagenet', 'imagenet']
+    SUPPORTED_DATASETS = [
+        'cifar10',
+        'cifar100',
+        'svhn',
+        'stl10',
+        'tinyimagenet',
+        'imagenet'
+    ]
 
     MEAN = {
         'cifar10':      [0.4914, 0.4822, 0.4465],
@@ -34,7 +43,8 @@ class ImageAugment(object):
     def __init__(self,
                  size: int or tuple,
                  data: str,
-                 impl: str):
+                 impl: str ='torchvision'):
+        super(ImageAugment, self).__init__()
 
         if isinstance(size, int):
             self.size = (size, size)
@@ -46,21 +56,23 @@ class ImageAugment(object):
         self.data = data
 
         if impl not in ['torchvision', 'albumentations']:
-            raise ValueError
+            raise ValueError(f"Currently only supports 'torchvision'.")
         self.impl = impl
+        self.transform: nn.Module = None
 
-    def __call__(self, img: np.ndarray):
-        if self.impl == 'torchvision':
-            return self.transform(img)
-        elif self.impl == 'albumentations':
-            return self.transform(image=img)['image']
-        else:
-            raise NotImplementedError
+    @torch.no_grad()
+    def forward(self, img: torch.Tensor) -> torch.Tensor:
+        return self.transform(img)
+    
+    @staticmethod
+    def forward_albumentations(img: np.ndarray):
+        raise NotImplementedError
+        # return self.transform(image=img)['image']
 
     def with_torchvision(self, size: tuple, blur: bool = True):
         raise NotImplementedError
 
-    def with_albumentations(self, size: tuple, blur: bool = True):
+    def with_albumentations(self, size: tuple, blur: bool = True):  # TODO; deprecated, move to legacy files
         raise NotImplementedError
 
     @property

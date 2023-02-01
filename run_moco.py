@@ -1,12 +1,14 @@
-# -*- coding: utf-8 -*-
 
 import os
 import sys
-import time
-import rich
+import typing
+import random
+import warnings
 
+import wandb
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.multiprocessing as mp
 import torch.distributed as dist
 
@@ -14,29 +16,43 @@ from rich.console import Console
 
 from datasets.cifar import CIFAR10ForMoCo, CIFAR10
 from datasets.cifar import CIFAR100ForMoCo, CIFAR100
-from datasets.svhn import SVHNForMoCo, SVHN
-from datasets.stl10 import STL10ForMoCo, STL10
-from datasets.imagenet import TinyImageNetForMoCo, TinyImageNet, ImageNetForMoCo, ImageNet
-from datasets.transforms import MoCoAugment, RandAugment, FinetuneAugment, TestAugment
-from configs.task_configs import MoCoConfig
-from models.backbone import ResNetBackbone
-from models.head import LinearHead, MLPHead
-from layers.batchnorm import SplitBatchNorm2d
-from tasks.moco import MoCo, MemoryQueue, MoCoLoss
-from utils.logging import get_rich_logger
-from utils.wandb import configure_wandb
+from datasets.stl10 import STL10, STL10ForMoCo
+from datasets.imagenet import ImageNet, ImageNetForMoCo
+from datasets.transforms import MoCoAugment, RandAugment
+from datasets.transforms import FinetuneAugment, TestAugment
+from configs.task_configs import MoCoConfig, SupMoCoConfig
+from tasks.moco import MoCo, SupMoCoAttract, SupMoCoEliminate
+from utils.wandb import initialize_wandb
+
+from configs.task_configs import MoCoWithMixturesConfig
+from tasks.moco_with_mixtures import MoCoWithMixtures
 
 
-AUGMENTS = {
+augmentations = {
     'rand': RandAugment,
     'moco': MoCoAugment,
+    'finetune': FinetuneAugment,
+    'test': TestAugment,
 }
 
 
-def main():
-    """Main function for single or distributed MoCo training."""
+def fix_random_seed(s: int = 0):
+    """Fix random seed for reproduction."""
+    random.seed(s)
+    np.random.seed(s)
+    torch.manual_seed(s)
+    torch.cuda.manual_seed(s)
 
-    config = MoCoConfig.parse_arguments()
+
+def main(config: typing.Union[MoCoConfig, SupMoCoConfig, MoCoWithMixturesConfig]):
+    """
+    Main function for single or distributed MoCo training.
+    Note that this `main` function is also used to run models that 
+    inherit the `tasks.moco.MoCo` class.
+    Arguments:
+        config;
+    """
+
     os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(gpu) for gpu in config.gpus])
     num_gpus_per_node = len(config.gpus)
     world_size = config.num_nodes * num_gpus_per_node
@@ -49,21 +65,24 @@ def main():
     console.log(config.__dict__)
     config.save()
 
+    fix_random_seed(config.seed)
+
     if config.distributed:
-        rich.print(f"Distributed training on {world_size} GPUs.")
+        console.print(f"Distributed training on {world_size} GPUs.")
         mp.spawn(
             main_worker,
             nprocs=config.num_gpus_per_node,
             args=(config, )
         )
     else:
-        rich.print(f"Single GPU training.")
-        main_worker(0, config=config)  # single machine, single gpu
+        console.print(f"Single GPU training on GPU {config.gpus[0]}.")
+        main_worker(0, config=config)
 
 
-def main_worker(local_rank: int, config: object):
-    """Single process."""
+def main_worker(local_rank: int, config: typing.Union[MoCoConfig, SupMoCoConfig, MoCoWithMixturesConfig]):
+    """Single process of MoCo training."""
 
+    # Initialize the training process.
     torch.cuda.set_device(local_rank)
     if config.distributed:
         dist_rank = config.node_rank * config.num_gpus_per_node + local_rank
@@ -74,157 +93,91 @@ def main_worker(local_rank: int, config: object):
             rank=dist_rank,
         )
 
+    # For distributed training across multiple GPUs, the training batch size and
+    # number of CPU workers for data loading must be manually divided by the
+    # total number of GPUs.
     config.batch_size = config.batch_size // config.world_size
     config.num_workers = config.num_workers // config.world_size
 
-    # Logging
-    if local_rank == 0:
-        logfile = os.path.join(config.checkpoint_dir, 'main.log')
-        logger = get_rich_logger(logfile)
-        if config.enable_wandb:
-            configure_wandb(
-                name='moco:' + config.hash,
-                project=config.data,
-                config=config
-            )
-    else:
-        logger = None
+    # Different data augmentations are used for training & intermediate model evaluation.
+    data_aug_config = dict(size=config.input_size, data=config.data, impl=config.augmentation)
+    query_transform = augmentations[config.query_augment](**data_aug_config)
+    key_transform = augmentations[config.key_augment](**data_aug_config)
+    memory_transform = FinetuneAugment(**data_aug_config)
+    test_transform = TestAugment(**data_aug_config)
 
-    # Networks
-    encoder = ResNetBackbone(name=config.backbone_type, data=config.data, in_channels=3)
-    if config.projector_type == 'linear':
-        head = LinearHead(encoder.out_channels, config.projector_dim)
-    elif config.projector_type == 'mlp':
-        head = MLPHead(encoder.out_channels, config.projector_dim)
+    # Instantiate datasets used for training, evaluation, and testing.
+    data_dir = os.path.join(config.data_root, config.data)  # e.g., './data/' + 'imagenet'
+    if config.data == 'cifar10':
+        train_set = CIFAR10ForMoCo(data_dir,
+                                   train=True,
+                                   query_transform=query_transform,
+                                   key_transform=key_transform)
+        memory_set = CIFAR10(data_dir, train=True, transform=memory_transform)
+        test_set     = CIFAR10(data_dir, train=False, transform=test_transform)
+    elif config.data == 'cifar100':
+        train_set = CIFAR100ForMoCo(data_dir,
+                                    train=True,
+                                    query_transform=query_transform,
+                                    key_transform=key_transform)
+        memory_set = CIFAR100(data_dir, train=True, transform=memory_transform)
+        test_set     = CIFAR100(data_dir, train=False, transform=test_transform)
+    elif config.data == 'stl10':
+        train_set = STL10ForMoCo(data_dir,
+                                 split='train+unlabeled',
+                                 query_transform=query_transform,
+                                 key_transform=key_transform)
+        memory_set = STL10(data_dir, split='train', transform=memory_transform)
+        test_set     = STL10(data_dir, split='test', transform=test_transform)
+    elif config.data == 'imagenet':
+        train_set    = ImageNetForMoCo(data_dir,
+                                       split='train',
+                                       query_transform=query_transform,
+                                       key_transform=key_transform)
+        memory_set, test_set = ImageNet.split_into_two_subsets(
+            data_dir, split='val', transforms=[memory_transform, test_transform]
+        )
+    else:
+        raise NotImplementedError(
+            f"Invalid data argument: {config.data}. "
+            f"Supports only one of the following: cifar10, cifar100, stl10, imagenet."
+        )
+    
+    # A wandb instance: https://wandb.ai
+    if local_rank == 0:
+        initialize_wandb(config)
+    
+    # Instantiate a MoCo trainer.
+    if config.__class__.__name__ == 'MoCoConfig':
+        trainer = MoCo(config=config, local_rank=local_rank)
+    elif config.__class__.__name__ == 'SupMoCoAttractConfig':
+        trainer = SupMoCoAttract(config=config, local_rank=local_rank)
+    elif config.__class__.__name__ == 'SupMoCoEliminateConfig':
+        trainer = SupMoCoEliminate(config=config, local_rank=local_rank)
+    elif config.__class__.__name__ == 'MoCoWithMixturesConfig':
+        trainer = MoCoWithMixtures(config=config, local_rank=local_rank)
     else:
         raise NotImplementedError
 
-    if config.split_bn:
-        encoder = SplitBatchNorm2d.convert_split_batchnorm(encoder)
-
-    # Data
-    trans_kwargs = dict(size=config.input_size, data=config.data, impl=config.augmentation, k=config.rand_k)
-    query_trans = AUGMENTS[config.query_augment](**trans_kwargs)
-    key_trans   = AUGMENTS[config.key_augment](**trans_kwargs)
-    finetune_trans = FinetuneAugment(**trans_kwargs)
-    test_trans = TestAugment(**trans_kwargs)
-
-    if config.data == 'cifar10':
-        data_dir = os.path.join(config.data_root, 'cifar10')
-        train_set = CIFAR10ForMoCo(data_dir,
-                                   train=True,
-                                   query_transform=query_trans,
-                                   key_transform=key_trans)
-        finetune_set = CIFAR10(data_dir, train=True, transform=finetune_trans)
-        test_set = CIFAR10(data_dir, train=False, transform=test_trans)
-    elif config.data == 'cifar100':
-        data_dir = os.path.join(config.data_root, 'cifar100')
-        train_set = CIFAR100ForMoCo(data_dir,
-                                    train=True,
-                                    query_transform=query_trans,
-                                    key_transform=key_trans)
-        finetune_set = CIFAR100(data_dir, train=True, transform=finetune_trans)
-        test_set = CIFAR100(data_dir, train=False, transform=test_trans)
-    elif config.data == 'svhn':
-        data_dir = os.path.join(config.data_root, 'svhn')
-        train_set = SVHNForMoCo(data_dir,
-                                split='train',
-                                query_transform=query_trans,
-                                key_transform=key_trans)
-        finetune_set = SVHN(data_dir, split='train', transform=finetune_trans)
-        test_set = SVHN(data_dir, split='test', transform=test_trans)
-    elif config.data == 'stl10':
-        data_dir = os.path.join(config.data_root, 'stl10')
-        train_set = STL10ForMoCo(data_dir,
-                                 split='train+unlabeled',
-                                 query_transform=query_trans,
-                                 key_transform=key_trans)
-        finetune_set = STL10(data_dir, split='train', transform=finetune_trans)
-        test_set = STL10(data_dir, split='test', transform=test_trans)
-    elif config.data == 'tinyimagenet':
-        data_dir = os.path.join(config.data_root, 'tiny-imagenet-200')
-        train_set = TinyImageNetForMoCo(data_dir,
-                                        split='train',
-                                        query_transform=query_trans,
-                                        key_transform=key_trans,
-                                        in_memory=True)
-        finetune_set = TinyImageNet(data_dir, split='train', transform=finetune_trans, in_memory=True)
-        test_set = TinyImageNet(data_dir, split='val', transform=test_trans, in_memory=True)
-    elif config.data == 'imagenet':
-        data_dir = os.path.join(config.data_root, 'imagenet')
-        train_set = ImageNetForMoCo(data_dir,
-                                    split='train',
-                                    query_transform=query_trans,
-                                    key_transform=key_trans)
-        finetune_set = ImageNet(data_dir, split='train', transform=finetune_trans)
-        test_set = ImageNet(data_dir, split='val', transform=test_trans)
-    else:
-        raise ValueError(f"Invalid data argument: {config.data}")
-
-    # Logging
-    if local_rank == 0:
-        logger.info(f'Data: {config.data}')
-        logger.info(f'Observations: {len(train_set):,}')
-        logger.info(f'Backbone ({config.backbone_type}): {encoder.num_parameters:,}')
-        logger.info(f'Projector ({config.projector_type}): {head.num_parameters:,}')
-        logger.info(f'Checkpoint directory: {config.checkpoint_dir}')
-    else:
-        logger = None
-
-    # Model (Task)
-    model = MoCo(encoder=encoder,
-                 head=head,
-                 queue=MemoryQueue(size=(config.projector_dim, config.num_negatives),
-                                   device=local_rank),
-                 loss_function=MoCoLoss(config.temperature)
-    )
-    model.prepare(
-        ckpt_dir=config.checkpoint_dir,
-        optimizer=config.optimizer,
-        learning_rate=config.learning_rate,
-        weight_decay=config.weight_decay,
-        cosine_warmup=config.cosine_warmup,
-        cosine_cycles=config.cosine_cycles,
-        cosine_min_lr=config.cosine_min_lr,
-        epochs=config.epochs,
-        batch_size=config.batch_size,
-        num_workers=config.num_workers,
-        key_momentum=config.key_momentum,
-        distributed=config.distributed,
-        local_rank=local_rank,
-        mixed_precision=config.mixed_precision,
-        resume=config.resume
-    )
-
-    # Train & evaluate
-    start = time.time()
-    model.run(
-        train_set,
-        memory_set=finetune_set,
-        query_set=test_set,
-        save_every=config.save_every,
-        logger=logger,
-        knn_k=config.knn_k,
-    )
-    elapsed_sec = time.time() - start
-
-    if logger is not None:
-        elapsed_mins = elapsed_sec / 60
-        elapsed_hours = elapsed_mins / 60
-        logger.info(
-            f'Total training time: {elapsed_mins:,.2f} minutes ({elapsed_hours:,.2f} hours).'
-        )
-        logger.handlers.clear()
+    # Start training. If the memory and test sets are provided, the representations
+    # will be evaluated using the nearest neighbors algorithm at the end of every epoch.
+    # A fast implementation of logistic regression will be available in future versions.
+    _ = trainer.run(train_set=train_set,
+                    memory_set=memory_set,
+                    test_set=test_set)    
+    wandb.finish()
 
 
 if __name__ == '__main__':
 
-    np.random.seed(0)
-    torch.manual_seed(0)
+    warnings.filterwarnings('ignore')
     torch.backends.cudnn.deterministic = False
     torch.backends.cudnn.benchmark = True
-
+    config = MoCoConfig.parse_arguments()
+    
     try:
-        main()
+        main(config)
     except KeyboardInterrupt:
+        wandb.finish()
+        os.system("kill $(ps aux | grep multiprocessing.spawn | grep -v grep | awk '{print $2}') ")
         sys.exit(0)

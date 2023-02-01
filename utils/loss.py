@@ -9,7 +9,6 @@ import rich
 
 from entmax import sparsemax, entmax15
 from utils.distributed import DistributedGather
-from utils.clustering import FastKMeans
 
 
 class LabelSmoothingLoss(nn.Module):

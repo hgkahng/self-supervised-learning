@@ -1,0 +1,20 @@
+--data stl10
+--input_size 96
+--backbone_type resnet50
+--epochs 500
+--batch_size 256
+--num_workers 8
+--gpus 0 1 2 3
+--optimizer sgd
+--learning_rate 0.3
+--weight_decay 1e-4
+--lr_warmup 10
+--save_every 50
+--eval_every 1
+--projector_type mlp
+--projector_dim 128
+--num_negatives 4096
+--temperature 0.2
+--key_momentum 0.999
+--query_augment moco
+--key_augment moco

@@ -54,7 +54,7 @@ class ForMoCo(object):
         # Randomly shuffle indices
         idx_shuffle = torch.randperm(global_batch_size).to(local_rank)
 
-        # Broadcast to all nodes
+        # Broadcast to all nodes (gpus)
         dist.broadcast(idx_shuffle, src=0)
 
         # Keep indices for restoring the original order
@@ -92,7 +92,7 @@ class ForMoCo(object):
         return x_gathered[idx_unshuffle_local]
 
 
-def concat_all_gather(tensor: torch.Tensor, dim=0):
+def concat_all_gather(tensor: torch.Tensor, dim: int = 0):
     """Gather tensors distributed across multiple processes."""
 
     if not dist.is_initialized():

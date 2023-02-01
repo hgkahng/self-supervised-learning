@@ -1,0 +1,22 @@
+--data cifar10
+--input_size 32
+--backbone_type resnet50
+--epochs 200
+--batch_size 256
+--num_workers 4
+--gpus 0
+--optimizer sgd
+--learning_rate 0.3
+--weight_decay 1e-4
+--lr_warmup 10
+--save_every 50
+--eval_every 1
+--projector_type mlp
+--projector_dim 2
+--num_negatives 1024
+--temperature 0.2
+--key_momentum 0.999
+--mixed_precision
+--wandb_project MOCO(proj-3)
+--wandb_group moco
+--wandb_job_type development

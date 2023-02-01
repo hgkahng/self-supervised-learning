@@ -1,0 +1,24 @@
+--data cifar100
+--input_size 32
+--backbone_type resnet50
+--epochs 500
+--batch_size 256
+--num_workers 4
+--gpus 0
+--optimizer sgd
+--learning_rate 0.3
+--weight_decay 1e-4
+--lr_warmup 10
+--save_every 50
+--eval_every 1
+--projector_type mlp
+--projector_dim 128
+--num_negatives 4096
+--temperature 0.2
+--key_momentum 0.999
+--mixed_precision
+--num_positives 0
+--loss_weight 1.0
+--wandb_project UNCL(CIFAR100)
+--wandb_group supmoco
+--wandb_job_type attract

@@ -1,0 +1,22 @@
+--data imagenet
+--input_size 224
+--backbone_type resnet50
+--epochs 200
+--batch_size 256
+--num_workers 16
+--gpus 0 1 2 3
+--optimizer sgd
+--learning_rate 0.03
+--weight_decay 1e-4
+--cosine_warmup 10
+--save_every 10
+--eval_every 10
+--projector_type mlp
+--projector_dim 128
+--temperature 0.2
+--key_momentum 0.999
+--num_negatives 65536
+--query_augment moco
+--key_augment moco
+--num_positives 1
+--loss_weight 0.5

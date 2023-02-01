@@ -1,0 +1,25 @@
+--data imagenet
+--input_size 224
+--backbone_type resnet50
+--epochs 200
+--batch_size 128
+--num_workers 32
+--gpus 0 1 2 3
+--optimizer sgd
+--learning_rate 0.03
+--weight_decay 1e-4
+--lr_warmup 10
+--save_every 10
+--eval_every 10
+--projector_type mlp
+--projector_dim 128
+--key_momentum 0.999
+--teacher_momentum 0.999
+--temperature 0.2
+--num_negatives 65536
+--ensemble_num_estimators 128
+--ensemble_dropout_rate 0.2
+--uncertainty_threshold 0.9
+--num_false_negatives 32
+--mixed_precision
+--wandb_project uncl(imagenet)
