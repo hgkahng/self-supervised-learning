@@ -129,10 +129,10 @@ dmypy.json
 .pyre/
 
 # This REPO
-checkpoints/
-data/
-wandb/
-tmp/
+checkpoints
+data
+.wandb
+wandb
 
 # IDE
 .vscode
