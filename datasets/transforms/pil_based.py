@@ -11,10 +11,10 @@ import PIL.ImageOps
 import PIL.ImageEnhance
 import PIL.ImageDraw
 from PIL import ImageFilter
-from torchvision.transforms import RandomRotation
+from torchvision.transforms.v2 import RandomRotation
 
 
-def to_tuple(v: int or float or list or tuple, center: float = 0.):
+def to_tuple(v: int | float | list | tuple, center: float = 0.):
     if isinstance(v, (int, float)):
         return (center - v , center + v)
     else:
@@ -24,7 +24,7 @@ def to_tuple(v: int or float or list or tuple, center: float = 0.):
 
 class MultipleRandomChoice(object):
     """Apply a total of `k` randomly selected transforms."""
-    def __init__(self, transforms: list or tuple, k: int = 5, verbose: bool = False):
+    def __init__(self, transforms: list | tuple, k: int = 5, verbose: bool = False):
         self.transforms = transforms
         self.k = k
         self.verbose = verbose
@@ -51,7 +51,7 @@ class GaussianBlur(object):
 
 
 class ShearX(object):
-    def __init__(self, limit: float or tuple = 0.3):
+    def __init__(self, limit: float | tuple = 0.3):
         self.limit = to_tuple(limit)
 
     def __call__(self, img: PIL.Image):
@@ -60,7 +60,7 @@ class ShearX(object):
 
 
 class ShearY(ShearX):
-    def __init__(self, limit: float or tuple = 0.3):
+    def __init__(self, limit: float | tuple = 0.3):
         super().__init__(limit)
 
     def __call__(self, img: PIL.Image):
@@ -69,7 +69,7 @@ class ShearY(ShearX):
 
 
 class TranslateX(object):
-    def __init__(self, limit: float or tuple = 0.45):
+    def __init__(self, limit: float | tuple = 0.45):
         self.limit = to_tuple(limit)
 
     def __call__(self, img: PIL.Image):
@@ -79,7 +79,7 @@ class TranslateX(object):
 
 
 class TranslateY(TranslateX):
-    def __init__(self, limit: float or tuple = 0.45):
+    def __init__(self, limit: float | tuple = 0.45):
         super().__init__(limit)
 
     def __call__(self, img: PIL.Image):
@@ -150,7 +150,7 @@ class Sharpness(object):
 
 
 class Cutout(object):
-    def __init__(self, scale: float or tuple = (0.2, 0.2)):
+    def __init__(self, scale: float | tuple = (0.2, 0.2)):
         if isinstance(scale, float):
             self.scale = (scale, scale)
         else:

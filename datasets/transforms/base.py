@@ -41,7 +41,7 @@ class ImageAugment(nn.Module):
     }
 
     def __init__(self,
-                 size: int or tuple,
+                 size: int | tuple,
                  data: str,
                  impl: str ='torchvision'):
         super(ImageAugment, self).__init__()

@@ -9,64 +9,48 @@
 
 import torch
 import torch.nn as nn
-import torchvision.transforms as T
+import torchvision.transforms.v2 as v2
 import albumentations as A
 
 from datasets.transforms.base import ImageAugment
 from datasets.transforms.pil_based import GaussianBlur
 from datasets.transforms.albumentations import NumpyToTensor
+    
 
-
-def apply_blur(data: str) -> bool:
-    if data.startswith('cifar') or data.startswith('svhn'):
-        return False
-    else:
-        return True
+def disable_blur(data: str) -> bool:
+    return data.startswith(('cifar', 'svhn'))
 
 
 class WeakAugment(ImageAugment):
     def __init__(self,
-                 size: int or tuple = (224, 224),
+                 size: int | tuple = (224, 224),
                  data: str = 'imagenet',
                  impl: str = 'torchvision',
                  **kwargs):
-        super(WeakAugment, self).__init__(size, data, impl)
+        super().__init__(size, data, impl)
 
         if self.impl == 'torchvision':
             self.transform = self.with_torchvision()
         else:
             raise NotImplementedError
 
-    def with_torchvision(self):
+    def with_torchvision(self) -> nn.Module:
         """
-        Weak augmentation with torchvision, expects `torch.tensor`s as input.
-        Operations stay on tensors, thus can run on CUDA gpus.
+            Weak augmentation with `torchvision`, expects a `torch.Tensor` as input.
+            Operations stay on tensors, thus can run on CUDA gpus.
         """
-        transform = [
-            T.RandomHorizontalFlip(0.5),
-            T.RandomCrop(size=self.size,
-                         padding=int(self.size[0] * 0.125),
-                         padding_mode='reflect'),
-            T.ConvertImageDtype(torch.float),
-            T.Normalize(self.mean, self.std)
+        transforms = [
+            v2.RandomHorizontalFlip(0.5),
+            v2.RandomCrop(
+                size=self.size, padding=int(self.size[0] * 0.125),
+                padding_mode='reflect'),
+            v2.ToDtype(torch.float, scale=True),
+            v2.Normalize(self.mean, self.std)
         ]
-        return nn.Sequential(*transform)
-
-    def with_torchvision_pil(self):
-        """Weak augmentation with torchvision."""
-        transform = [
-            T.ToPILImage(),
-            T.RandomHorizontalFlip(0.5),
-            T.RandomCrop(size=self.size,
-                         padding=int(self.size[0] * 0.125),
-                         padding_mode='reflect'),
-            T.ToTensor(),
-            T.Normalize(self.mean, self.std)
-        ]
-        return T.Compose(transform)
+        return v2.Compose(transforms)
 
     def with_albumentations(self):
-        """Weak augmentation with albumentations."""
+        """Weak augmentation with `albumentations`."""
         transform = [
             A.HorizontalFlip(0.5),
             A.Resize(1.125 * self.size[0], 1.125 * self.size[1], p=1.0),
@@ -79,13 +63,13 @@ class WeakAugment(ImageAugment):
 
 class MoCoAugment(ImageAugment):
     def __init__(self,
-                 size: int or tuple = (224, 224),
+                 size: int | tuple = (224, 224),
                  data: str = 'imagenet',
                  impl: str = 'torchvision',
                  **kwargs):
-        super(MoCoAugment, self).__init__(size, data, impl)
+        super().__init__(size, data, impl)
         
-        self.blur = apply_blur(self.data)
+        self.blur = not disable_blur(self.data)
         if self.impl == 'torchvision':
             self.transform = self.with_torchvision()
         elif self.impl == 'albumentations':
@@ -93,48 +77,33 @@ class MoCoAugment(ImageAugment):
 
     def with_torchvision(self) -> nn.Module:
         """
-        MoCo-v2-style augmentation with torchvision, expects `torch.tensor`s as input.
-        Operations stay on tensors, thus can run on CUDA gpus.
+            MoCo-v2-style augmentation with torchvision, expects `torch.Tensor` as input.
+            Operations stay on tensors, thus can run on CUDA gpus.
         """
-        transform = [
-            T.RandomResizedCrop(self.size, scale=(0.2, 1.0)),
-            T.RandomApply([T.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
-            T.RandomGrayscale(p=0.2)
-        ]
-        if self.blur:
-            transform += [
-                T.RandomApply([T.GaussianBlur(kernel_size=5, sigma=(0.1, 2.0))], p=.5),  # TODO: check `kernel_size'
-            ]
-        transform += [
-            T.RandomHorizontalFlip(0.5),
-            T.ConvertImageDtype(torch.float),
-            T.Normalize(self.mean, self.std)
-        ]
-        return nn.Sequential(*transform)
 
-    def with_torchvision_pil(self):
-        """MoCo_v2-style augmentation with torchvision, expects `np.ndarray` or `torch.tensor`s."""
-        transform = [
-            T.ToPILImage(),
-            T.RandomResizedCrop(self.size, scale=(0.2, 1.0)),
-            T.RandomApply([
-                T.ColorJitter(0.4, 0.4, 0.4, 0.1)
-            ], p=0.8),
-            T.RandomGrayscale(p=0.2),
+        transforms = [
+            v2.RandomResizedCrop(self.size, scale=(0.2, 1.0)),
+            v2.RandomApply([v2.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
+            v2.RandomGrayscale(p=0.2)
         ]
+
         if self.blur:
-            transform += [
-                T.RandomApply([GaussianBlur([0.1, 2.0])], p=0.5)
+            transforms += [
+                v2.RandomApply(
+                    v2.GaussianBlur(5, simga=(0.1, 2.0)), p=0.5,
+                )
             ]
-        transform += [
-            T.RandomHorizontalFlip(0.5),
-            T.ToTensor(),
-            T.Normalize(self.mean, self.std)
+
+        transforms += [
+            v2.RandomHorizontalFlip(0.5),
+            v2.ToDtype(torch.float, scale=True),
+            v2.Normalize(self.mean, self.std),
         ]
-        return T.Compose(transform)
+
+        return v2.Compose(transforms)
 
     def with_albumentations(self):
-        """MoCo_v2-style augmentation with torchvision."""
+        """MoCo_v2-style augmentation with `albumentations`."""
         transform = [
             A.RandomResizedCrop(*self.size, scale=(0.2, 1.0), ratio=(3/4, 4/3)),
             A.ColorJitter(0.4, 0.4, 0.4, 0.1, p=0.8),
@@ -155,13 +124,13 @@ class MoCoAugment(ImageAugment):
 
 class SimCLRAugment(ImageAugment):
     def __init__(self,
-                 size: int or tuple = (224, 224),
+                 size: int | tuple = (224, 224),
                  data: str = 'imagenet',
                  impl: str = 'torchvision',
                  **kwargs):
-        super(SimCLRAugment, self).__init__(size, data, impl)
+        super().__init__(size, data, impl)
         
-        self.blur = apply_blur(self.data)
+        self.blur = not disable_blur(self.data)
         if self.impl == 'torchvision':
             self.transform = self.with_torchvision()
         elif self.impl == 'albumentations':
@@ -169,45 +138,28 @@ class SimCLRAugment(ImageAugment):
 
     def with_torchvision(self) -> nn.Module:
         """
-        SimCLR-style augmentation with torchvision,, expects `torch.tensor`s as input.
-        Operations stay on tensors, thus can run on CUDA gpus.
+            SimCLR-style augmentation with torchvision, expects `torch.Tensor` as input.
+            Operations stay on tensors, thus can run on CUDA gpus.
         """
-        transform = [
-            T.RandomResizedCrop(self.size, scale=(0.08, 1.00)),
-            T.RandomApply([T.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
-            T.RandomGrayscale(p=0.2),
-        ]
-        if self.blur:
-            transform += [
-                T.RandomApply([T.GaussianBlur(kernel_size=5, sigma=(0.1, 2.0))], p=0.5)
-            ]
-        transform += [
-            T.RandomHorizontalFlip(0.5),
-            T.ConvertImageDtype(torch.float),
-            T.Normalize(self.mean, self.std)
-        ]
-        return nn.Sequential(*transform)
 
-    def with_torchvision_pil(self):
-        """SimCLR-style augmentation with torchvision, expects `np.ndarray` or `torch.tensor`s."""
-        transform = [
-            T.ToPILImage(),
-            T.RandomResizedCrop(self.size, scale=(0.08, 1.00)),
-            T.RandomApply([
-                T.ColorJitter(0.4, 0.4, 0.4, 0.1)
-            ], p=0.8),
-            T.RandomGrayscale(p=0.2),
+        transforms = [
+            v2.RandomResizedCrop(self.size, scale=(0.08, 1.00)),
+            v2.RandomApply([v2.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
+            v2.RandomGrayscale(p=0.2),
         ]
+
         if self.blur:
-            transform += [
-                T.RandomApply([GaussianBlur([0.1, 2.0])], p=0.5)
+            transforms += [
+                v2.RandomApply([v2.GaussianBlur(5, sigma=(0.1, 2.0))], p=0.5)
             ]
-        transform += [
-            T.RandomHorizontalFlip(0.5),
-            T.ToTensor(),
-            T.Normalize(self.mean, self.std)
+        
+        transforms += [
+            v2.RandomHorizontalFlip(0.5),
+            v2.ToDtype(torch.float, scale=True),
+            v2.Normalize(self.mean, self.std)
         ]
-        return T.Compose(transform)
+
+        return v2.Compose(transforms)
 
     def with_albumentations(self):
         """SimCLR-style augmentation with torchvision."""
