@@ -10,16 +10,18 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader
+from torch.utils.data import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel
-from torch.cuda.amp.grad_scaler import GradScaler
+from torch.amp import GradScaler
 
 from tasks.base import Task
 from layers.batchnorm import SplitBatchNorm2d
 from models.backbone import ResNetBackbone
 from models.head import MLPHead
 
-from utils.distributed import ForMoCo, concat_all_gather
+from utils.distributed import ForMoCo
+from utils.distributed import concat_all_gather
 from utils.metrics import TopKAccuracy
 from utils.knn import KNNEvaluator
 from utils.optimization import WarmupCosineDecayLR
@@ -35,10 +37,8 @@ class MoCoLoss(nn.Module):
         self.temperature = temperature
 
     def forward(self,
-                query: torch.FloatTensor,
-                key: torch.FloatTensor,
-                negatives: torch.FloatTensor,
-                ) -> typing.Tuple[torch.FloatTensor]:
+                query: torch.FloatTensor, key: torch.FloatTensor,
+                negatives: torch.FloatTensor, ) -> tuple[torch.FloatTensor]:
 
         # Compute temperature-scaled similarities
         pos_logits = torch.einsum('nc,nc->n', [query, key]).view(-1, 1)              # (B, 1  )
@@ -51,7 +51,6 @@ class MoCoLoss(nn.Module):
         loss = nn.functional.cross_entropy(logits, targets, reduction='mean')
 
         return loss, logits
-
 
 
 class SupMoCoAttractLoss(nn.Module):
@@ -185,8 +184,7 @@ class MemoryQueue(nn.Module):
         return self.buffer
 
     @torch.no_grad()
-    def update(self,
-               keys: torch.FloatTensor,
+    def update(self, keys: torch.FloatTensor,
                indices: torch.LongTensor = None,
                labels: torch.LongTensor = None) -> None:
         """
@@ -234,12 +232,12 @@ class MemoryQueue(nn.Module):
 
 
 class MoCo(Task):
-    """MoCo trainer."""
-    def __init__(self, config: object, local_rank: int):
+    """Trainer class for MoCo."""
+    def __init__(self, config, local_rank: int = 0):
         super(MoCo, self).__init__()
 
-        self.config:  object = config
-        self.local_rank: int = local_rank
+        self.config = config
+        self.local_rank = local_rank
 
         self._init_logger()
         self._init_modules()
@@ -250,8 +248,8 @@ class MoCo(Task):
 
     def _init_logger(self) -> None:
         """
-        For distributed training, logging is only performed on a single process
-        to avoid uninformative duplicates.
+            For distributed training, logging is only performed on
+            a single process to avoid uninformative duplicates.
         """
         if self.local_rank == 0:
             logfile = os.path.join(self.config.checkpoint_dir, 'main.log')
@@ -262,13 +260,14 @@ class MoCo(Task):
 
     def _init_modules(self) -> None:
         """
-        Initializes the following modules:
-            1) query network (self.net_q)
-            2) key network (self.net_k)
-            3) memory queue (self.queue)
+            Initializes the following modules:
+                1) query network (self.net_q)
+                2) key network (self.net_k)
+                3) memory queue (self.queue)
         """
-        encoder = ResNetBackbone(name=self.config.backbone_type, data=self.config.data, in_channels=3)
-        head    = MLPHead(encoder.out_channels, self.config.projector_dim)
+        encoder = ResNetBackbone(name=self.config.backbone_type, data=self.config.data)
+        head = MLPHead(encoder.out_channels, self.config.projector_dim)
+        
         if not self.config.distributed:
             # Ghost Norm; https://arxiv.org/abs/1705.0874
             encoder = SplitBatchNorm2d.convert_split_batchnorm(encoder)
@@ -276,9 +275,13 @@ class MoCo(Task):
         self.net_q = nn.Sequential()
         self.net_q.add_module('encoder', encoder)
         self.net_q.add_module('head', head)
+
         self.net_k = copy.deepcopy(self.net_q)
         self.freeze_params(self.net_k)
-        self.queue = MemoryQueue(size=(self.net_k.head.num_features, self.config.num_negatives))
+        
+        self.queue = MemoryQueue(
+            size=(self.net_k.head.num_features, self.config.num_negatives)
+        )
 
         if self.logger is not None:
             self.logger.info(f"Encoder ({self.config.backbone_type}): {encoder.num_parameters:,}")
@@ -286,16 +289,20 @@ class MoCo(Task):
 
     def _init_cuda(self) -> None:
         """
-        1) Assigns cuda devices to modules.
-        2) Wraps query network with `DistributedDataParallel`.
+            1) Assigns cuda devices to modules.
+            2) Wraps query network with `DistributedDataParallel`.
         """
+
         if self.config.distributed:
-            self.net_q = DistributedDataParallel(
-                module=self.net_q.to(self.local_rank),
-                device_ids=[self.local_rank],
-                bucket_cap_mb=100)
+            self.net_q = \
+                DistributedDataParallel(
+                    module=self.net_q.to(self.local_rank),
+                    device_ids=[self.local_rank],
+                    bucket_cap_mb=100
+                )
         else:
             self.net_q.to(self.local_rank)
+        
         self.net_k.to(self.local_rank)
         self.queue.to(self.local_rank)
 
@@ -304,29 +311,39 @@ class MoCo(Task):
 
     def _init_optimization(self) -> None:
         """
-        1) optimizer: {SGD, LARS}
-        2) learning rate scheduler: linear warmup + cosine decay
-        3) float16 training (optional)
+            1) optimizer: {SGD, LARS}
+            2) learning rate scheduler: linear warmup + cosine decay
+            3) float16 training (optional)
         """
-        self.optimizer = configure_optimizer(params=self.net_q.parameters(),
-                                             name=self.config.optimizer,
-                                             lr=self.config.learning_rate,
-                                             weight_decay=self.config.weight_decay)
-        self.scheduler = WarmupCosineDecayLR(optimizer=self.optimizer,
-                                             total_epochs=self.config.epochs,
-                                             warmup_epochs=self.config.lr_warmup,
-                                             warmup_start_lr=1e-4,
-                                             min_decay_lr=1e-4)
-        self.amp_scaler = GradScaler() if self.config.mixed_precision else None
+
+        self.optimizer = \
+            configure_optimizer(
+                self.net_q.parameters(),
+                name=self.config.optimizer,
+                lr=self.config.learning_rate,
+                weight_decay=self.config.weight_decay
+            )
+        
+        self.scheduler = \
+            WarmupCosineDecayLR(
+                self.optimizer,
+                total_epochs=self.config.epochs,
+                warmup_epochs=self.config.lr_warmup,
+                warmup_start_lr=1e-4,
+                min_decay_lr=1e-4
+            )
+        
+        self.amp_scaler = \
+            GradScaler() if self.config.mixed_precision else None
 
     def _resume_training_from_checkpoint(self) -> None:
         """
-        Resume training from a previous checkpoint if
-        a valid path is provided to the `resume` argument.
+            Resume training from a previous checkpoint if
+            a valid path is provided to the `resume` argument.
         """
         if self.config.resume is not None:
             if os.path.exists(self.config.resume):
-                self.start_epoch = self.load_model_from_checkpoint(
+                self.start_epoch = 1 + self.load_model_from_checkpoint(
                     self.config.resume, self.local_rank
                 )
                 if self.logger is not None:
@@ -334,7 +351,7 @@ class MoCo(Task):
                                      f"Resuming from epoch = {self.start_epoch}")
             else:
                 if self.logger is not None:
-                    self.logger.warn("Invalid checkpoint. Starting from epoch = 1")
+                    self.logger.warning("Invalid checkpoint. Starting from epoch = 1")
                 self.start_epoch = 1
         else:
             if self.logger is not None:
@@ -345,7 +362,7 @@ class MoCo(Task):
     def run(self, train_set: torch.utils.data.Dataset,
                   memory_set: torch.utils.data.Dataset,
                   test_set: torch.utils.data.Dataset,
-                  **kwargs):
+                  **kwargs) -> None:
         """Training and evaluation."""
 
         if self.logger is not None:
@@ -359,7 +376,7 @@ class MoCo(Task):
             sampler = DistributedSampler(train_set, shuffle=True)
         else:
             sampler = None
-        shuffle: bool = sampler is None
+        shuffle = sampler is None
         data_loader = DataLoader(train_set,
                                  batch_size=self.config.batch_size,
                                  sampler=sampler,
@@ -372,17 +389,16 @@ class MoCo(Task):
         if self.local_rank == 0:
             # Intermediate evaluation of representations based on nearest neighbors.
             # The frequency is controlled by the `eval_every' argument of this function.
-            eval_loader_config = dict(batch_size=self.config.batch_size * self.config.world_size,
-                                      num_workers=self.config.num_workers * self.config.world_size,
-                                      pin_memory=True,
-                                      persistent_workers=True)
-            memory_loader = DataLoader(memory_set, **eval_loader_config)
-            test_loader   = DataLoader(test_set, **eval_loader_config)
+            eval_loader_cfg = dict(
+                batch_size=self.config.batch_size * self.config.world_size,
+                num_workers=self.config.num_workers * self.config.world_size,
+                pin_memory=True, persistent_workers=True
+            )
+            memory_loader = DataLoader(memory_set, **eval_loader_cfg)
+            test_loader = DataLoader(test_set, **eval_loader_cfg)
             knn_evaluator = KNNEvaluator(num_neighbors=[5, 200], num_classes=train_set.num_classes)
         else:
-            memory_loader = None
-            test_loader   = None
-            knn_evaluator = None
+            memory_loader = test_loader = knn_evaluator = None
 
         for epoch in range(1, self.config.epochs + 1):
 
@@ -401,7 +417,7 @@ class MoCo(Task):
 
             # Evaluate the learned representations every `eval_every` epochs, on rank 0.
             if (knn_evaluator is not None) & (epoch % self.config.eval_every == 0):
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast('cuda'):
                     knn_scores: dict = knn_evaluator.evaluate(
                         net=self.net_q.module.encoder if self.config.distributed else self.net_q.encoder,
                         memory_loader=memory_loader,
@@ -434,7 +450,7 @@ class MoCo(Task):
                 self.logger.info(msg)
 
             # Save intermediate model checkpoints
-            if (self.local_rank == 0) & (epoch % self.config.save_every == 0):
+            if (self.local_rank == 0) and (epoch % self.config.save_every == 0):
                 fmt = maxlen_fmt(self.config.epochs)
                 ckpt = os.path.join(self.config.checkpoint_dir, f"ckpt.{epoch:{fmt}}.pth.tar")
                 self.save_checkpoint(ckpt, epoch=epoch, history=log)
@@ -444,7 +460,7 @@ class MoCo(Task):
                 self.scheduler.step()
 
     @suppress_logging_info
-    def train(self, data_loader: DataLoader, **kwargs) -> typing.Dict[str, float]:
+    def train(self, data_loader: DataLoader, **kwargs) -> dict[str, float]:
         """Iterates over the `data_loader` once for MoCo training."""
 
         steps: int = len(data_loader)
@@ -454,32 +470,39 @@ class MoCo(Task):
             'train/rank@1': torch.zeros(steps, device=self.local_rank),
         }
 
-        with configure_progress_bar(transient=True,
-                                    auto_refresh=False,
-                                    disable=self.local_rank != 0) as pbar:
+        with configure_progress_bar(
+            transient=True, auto_refresh=False, disable=self.local_rank != 0) as pbar:
+            
             job = pbar.add_task(f":thread:", total=steps)
+            
             for i, batch in enumerate(data_loader):
+                
                 # Single batch iteration
                 loss, rank = self.train_step(batch)
                 metrics['train/loss'][i]   = loss.detach()
                 metrics['train/rank@1'][i] = rank.detach()
+                
                 # Update progress bar
-                msg = f':thread: [{i+1}/{steps}]: ' + \
-                    ' | '.join([f"{k} : {self.nanmean(v[:i+1]).item():.4f}" for k, v in metrics.items()])
+                msg = f":thread: [{i+1}/{steps}]: " + " | ".join(
+                    [f"{k} : {torch.nanmean(v[:i+1]).item():.4f}" for k, v in metrics.items()]
+                )
                 pbar.update(job, advance=1., description=msg)
                 pbar.refresh()
 
-        return {k: self.nanmean(v).item() for k, v in metrics.items()}
+        return {k: torch.nanmean(v).item() for k, v in metrics.items()}
 
-    def train_step(self, batch: dict) -> typing.Tuple[torch.FloatTensor]:
+    def train_step(self, batch: dict) -> tuple[torch.FloatTensor]:
         """A single forward & backward pass using a batch of examples."""
 
-        with torch.cuda.amp.autocast(self.amp_scaler is not None):
+        with torch.amp.autocast('cuda', enabled=self.amp_scaler is not None):
+            
             # Fetch two positive views; {query, key}
             x_q = batch['x1'].to(self.local_rank, non_blocking=True)
             x_k = batch['x2'].to(self.local_rank, non_blocking=True)
+            
             # Compute query features; (B, f)
             z_q = F.normalize(self.net_q(x_q), dim=1)
+            
             with torch.no_grad():
                 # An exponential moving average update of the key network
                 self._momentum_update_key_net()
@@ -489,12 +512,15 @@ class MoCo(Task):
                 z_k = F.normalize(self.net_k(x_k), dim=1)
                 # Restore key features to their original devices
                 z_k = ForMoCo.batch_unshuffle_ddp(z_k, idx_unshuffle)
+            
             # Compute loss & metrics
             loss, logits = self.criterion(z_q, z_k, self.queue.buffer)
             y = batch['y'].to(self.local_rank).detach()
             rank = TopKAccuracy(k=1)(logits.detach(), torch.zeros_like(y))
+            
             # Backpropagate & update
             self.backprop(loss)
+            
             # Update memory queue
             self.queue.update(keys=z_k,
                               indices=batch['idx'].to(self.local_rank),
@@ -503,7 +529,9 @@ class MoCo(Task):
         return loss, rank
 
     def backprop(self, loss: torch.FloatTensor) -> None:
-        """SGD parameter update, optionally with float16 training."""
+        """
+            SGD parameter update, optionally with float16 training.
+        """
         if self.amp_scaler is not None:
             self.amp_scaler.scale(loss).backward()
             self.amp_scaler.step(self.optimizer)
@@ -552,7 +580,7 @@ class MoCo(Task):
         """
         Loading model from a checkpoint. Be sure to have
         all modules properly initialized prior to executing this function.
-        Returns the epoch of the checkpoint + 1 (used as `self.start_epoch`).
+        Returns the epoch of the checkpoint .
         """
         device = torch.device(f'cuda:{local_rank}')
         ckpt = torch.load(path, map_location=device)
@@ -579,7 +607,7 @@ class MoCo(Task):
         if 'scheduler' in ckpt:
             self.scheduler.load_state_dict(ckpt['scheduler'])
 
-        return ckpt['epoch'] + 1
+        return ckpt['epoch']
 
     @staticmethod
     def nanmean(x: torch.FloatTensor):
@@ -762,18 +790,26 @@ class SupMoCo(MoCo):  # TODO: remove as deprecated
                                                       torch.FloatTensor,
                                                       torch.LongTensor,
                                                       torch.FloatTensor]:
-        """A single forward & backward pass using a batch of examples."""
-        with torch.cuda.amp.autocast(self.amp_scaler is not None):
+        """
+            A single forward & backward pass using a batch of examples.
+        """
+        
+        with torch.amp.autocast('cuda', enabled=self.amp_scaler is not None):
+        
             # Fetch two positive view; {query, key}
             x_q = batch['x1'].to(self.local_rank, non_blocking=True)
             x_k = batch['x2'].to(self.local_rank, non_blocking=True)
+        
             # Compute query features; (B, f)
             z_q = F.normalize(self.net_q(x_q), dim=1)
+            
+            # Compute key features; (B, f)
             with torch.no_grad():
                 self._momentum_update_key_net()
                 x_k, idx_unshuffle = ForMoCo.batch_shuffle_ddp(x_k)
                 z_k = F.normalize(self.net_k(x_k), dim=1)
                 z_k = ForMoCo.batch_unshuffle_ddp(z_k, idx_unshuffle)
+            
             # Compute loss & metrics
             y = batch['y'].to(self.local_rank).detach()
             if self.queue.is_reliable:

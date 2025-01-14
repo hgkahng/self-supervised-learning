@@ -8,7 +8,6 @@ import warnings
 import wandb
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.multiprocessing as mp
 import torch.distributed as dist
 
@@ -16,19 +15,24 @@ from rich.console import Console
 
 from datasets.cifar import CIFAR10ForMoCo, CIFAR10
 from datasets.cifar import CIFAR100ForMoCo, CIFAR100
-from datasets.stl10 import STL10, STL10ForMoCo
+from datasets.stl10 import STL10ForMoCo, STL10
 from datasets.imagenet import ImageNet, ImageNetForMoCo
+
 from datasets.transforms import MoCoAugment, RandAugment
 from datasets.transforms import FinetuneAugment, TestAugment
-from configs.task_configs import MoCoConfig, SupMoCoConfig
-from tasks.moco import MoCo, SupMoCoAttract, SupMoCoEliminate
+
+from configs.task_configs import MoCoConfig
+from configs.task_configs import SupMoCoConfig
+from configs.task_configs import MoCoWithMixturesConfig  # TODO: remove
+
+from tasks.moco import MoCo
+from tasks.moco import SupMoCoAttract, SupMoCoEliminate
+from tasks.moco_with_mixtures import MoCoWithMixtures    # TODO: remove
+
 from utils.wandb import initialize_wandb
 
-from configs.task_configs import MoCoWithMixturesConfig
-from tasks.moco_with_mixtures import MoCoWithMixtures
 
-
-augmentations = {
+AUGMENTATIONS = {
     'rand': RandAugment,
     'moco': MoCoAugment,
     'finetune': FinetuneAugment,
@@ -36,7 +40,7 @@ augmentations = {
 }
 
 
-def fix_random_seed(s: int = 0):
+def fix_random_seed(s: int = 42):
     """Fix random seed for reproduction."""
     random.seed(s)
     np.random.seed(s)
@@ -44,13 +48,12 @@ def fix_random_seed(s: int = 0):
     torch.cuda.manual_seed(s)
 
 
-def main(config: typing.Union[MoCoConfig, SupMoCoConfig, MoCoWithMixturesConfig]):
+def main(config: typing.Union[MoCoConfig, SupMoCoConfig]):
     """
-    Main function for single or distributed MoCo training.
-    Note that this `main` function is also used to run models that 
-    inherit the `tasks.moco.MoCo` class.
-    Arguments:
-        config;
+        Main function for single or distributed MoCo training.
+        Note: this function is also used to run models that inherit the `tasks.moco.MoCo` class.
+        Arguments:
+            config;
     """
 
     os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(gpu) for gpu in config.gpus])
@@ -79,7 +82,8 @@ def main(config: typing.Union[MoCoConfig, SupMoCoConfig, MoCoWithMixturesConfig]
         main_worker(0, config=config)
 
 
-def main_worker(local_rank: int, config: typing.Union[MoCoConfig, SupMoCoConfig, MoCoWithMixturesConfig]):
+def main_worker(local_rank: int,
+                config: typing.Union[MoCoConfig, SupMoCoConfig, MoCoWithMixturesConfig]):
     """Single process of MoCo training."""
 
     # Initialize the training process.
@@ -100,11 +104,11 @@ def main_worker(local_rank: int, config: typing.Union[MoCoConfig, SupMoCoConfig,
     config.num_workers = config.num_workers // config.world_size
 
     # Different data augmentations are used for training & intermediate model evaluation.
-    data_aug_config = dict(size=config.input_size, data=config.data, impl=config.augmentation)
-    query_transform = augmentations[config.query_augment](**data_aug_config)
-    key_transform = augmentations[config.key_augment](**data_aug_config)
-    memory_transform = FinetuneAugment(**data_aug_config)
-    test_transform = TestAugment(**data_aug_config)
+    aug_cfg = dict(size=config.input_size, data=config.data, impl=config.augmentation)
+    query_transform = AUGMENTATIONS[config.query_augment](**aug_cfg)
+    key_transform = AUGMENTATIONS[config.key_augment](**aug_cfg)
+    memory_transform = FinetuneAugment(**aug_cfg)
+    test_transform = TestAugment(**aug_cfg)
 
     # Instantiate datasets used for training, evaluation, and testing.
     data_dir = os.path.join(config.data_root, config.data)  # e.g., './data/' + 'imagenet'
@@ -114,7 +118,7 @@ def main_worker(local_rank: int, config: typing.Union[MoCoConfig, SupMoCoConfig,
                                    query_transform=query_transform,
                                    key_transform=key_transform)
         memory_set = CIFAR10(data_dir, train=True, transform=memory_transform)
-        test_set     = CIFAR10(data_dir, train=False, transform=test_transform)
+        test_set = CIFAR10(data_dir, train=False, transform=test_transform)
     elif config.data == 'cifar100':
         train_set = CIFAR100ForMoCo(data_dir,
                                     train=True,
@@ -165,7 +169,7 @@ def main_worker(local_rank: int, config: typing.Union[MoCoConfig, SupMoCoConfig,
     _ = trainer.run(train_set=train_set,
                     memory_set=memory_set,
                     test_set=test_set)    
-    wandb.finish()
+    wandb.finish();
 
 
 if __name__ == '__main__':
